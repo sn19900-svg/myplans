@@ -22,6 +22,13 @@ data class ColumnPoint(
     val stirrupText: String
 )
 
+data class WallLine(
+    val startX: Float,
+    val startY: Float,
+    val endX: Float,
+    val endY: Float
+)
+
 data class StructuralSchedule(
     val slabThicknessCm: Int,
     val slabMainReinforcement: String,
@@ -38,5 +45,6 @@ data class GeneratedPlan(
     val plotDepthM: Double,
     val rooms: List<RoomRect>,
     val columns: List<ColumnPoint>,
+    val customWalls: List<WallLine> = emptyList(),
     val schedule: StructuralSchedule
 )
