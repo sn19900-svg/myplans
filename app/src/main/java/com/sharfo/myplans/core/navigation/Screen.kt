@@ -6,4 +6,5 @@ sealed class Screen(val route: String) {
     data object Preview : Screen("preview/{projectId}") {
         fun createRoute(projectId: Long) = "preview/$projectId"
     }
+    data object CadEditor : Screen("cad_editor")
 }
