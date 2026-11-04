@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
@@ -30,12 +31,10 @@ fun CADEditorScreen(
 ) {
     val state by viewModel.state.collectAsState()
     
-    // تحكم الكاميرا (Pan & Zoom)
-    var zoom by remember { mutableStateOf(40.0f) } // بكسل لكل متر
+    var zoom by remember { mutableStateOf(40.0f) }
     var panX by remember { mutableStateOf(0f) }
     var panY by remember { mutableStateOf(0f) }
 
-    // حالة الرسم المؤقت عند السحب
     var drawingStart by remember { mutableStateOf<Point2D?>(null) }
     var currentRawPoint by remember { mutableStateOf<Point2D?>(null) }
 
@@ -112,13 +111,11 @@ fun CADEditorScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput(zoom, panX, panY) {
-                        // تفاعل اللمس للرسم
                         awaitPointerEventScope {
                             while (true) {
                                 val event = awaitPointerEvent()
                                 val pointer = event.changes.firstOrNull() ?: continue
                                 
-                                // تحويل إحداثيات الشاشة إلى إحداثيات هندسية حقيقية بالمتر
                                 val screenX = pointer.position.x
                                 val screenY = pointer.position.y
                                 
@@ -154,9 +151,7 @@ fun CADEditorScreen(
                 val centerX = size.width / 2f + panX
                 val centerY = size.height / 2f + panY
 
-                // 1. رسم الشبكة الهندسية (Grid)
-                val gridStep = zoom * 0.5 // كل 50 سم خط شبكي
-                val maxDim = kotlin.math.max(size.width, size.height)
+                val gridStep = zoom * 0.5
                 var x = centerX % gridStep
                 while (x < size.width) {
                     drawLine(Color(0x22FFFFFF), Offset(x, 0f), Offset(x, size.height), 1f)
@@ -168,7 +163,6 @@ fun CADEditorScreen(
                     y += gridStep
                 }
 
-                // 2. رسم الجدران المحفوظة
                 state.walls.forEach { wall ->
                     val sx = (wall.start.x * zoom).toFloat() + centerX
                     val sy = (wall.start.y * zoom).toFloat() + centerY
@@ -184,7 +178,6 @@ fun CADEditorScreen(
                     )
                 }
 
-                // 3. رسم الجدار قيد الإنشاء حالياً أثناء السحب
                 val start = drawingStart
                 val current = currentRawPoint
                 if (start != null && current != null) {
@@ -197,8 +190,7 @@ fun CADEditorScreen(
                         color = Color(0xFFFFB300),
                         start = Offset(sx, sy),
                         end = Offset(ex, ey),
-                        strokeWidth = 6f,
-                        style = Stroke(width = 6f)
+                        strokeWidth = 6f
                     )
                 }
             }

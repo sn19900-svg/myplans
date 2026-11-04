@@ -19,9 +19,8 @@ data class RoomSpace(
     val category: RoomCategory,
     val polygonPoints: List<Point2D>,
     val floorColorHex: String = "#E0F7FA",
-    val floorType: String = السيراميك
+    val floorType: String = "سيراميك"
 ) {
-    // حساب المساحة تلقائياً بالمتر المربع باستخدام صيغة المضلع (Shoelace formula)
     val areaSqm: Double
         get() {
             if (polygonPoints.size < 3) return 0.0
@@ -35,7 +34,6 @@ data class RoomSpace(
             return kotlin.math.abs(sum) / 2.0
         }
 
-    // حساب المحيط
     val perimeterMeters: Double
         get() {
             if (polygonPoints.size < 2) return 0.0
