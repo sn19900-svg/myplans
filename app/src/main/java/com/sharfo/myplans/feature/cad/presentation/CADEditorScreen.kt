@@ -16,7 +16,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -151,7 +150,7 @@ fun CADEditorScreen(
                 val centerX = size.width / 2f + panX
                 val centerY = size.height / 2f + panY
 
-                val gridStep = zoom * 0.5
+                val gridStep = zoom * 0.5f
                 var x = centerX % gridStep
                 while (x < size.width) {
                     drawLine(Color(0x22FFFFFF), Offset(x, 0f), Offset(x, size.height), 1f)
