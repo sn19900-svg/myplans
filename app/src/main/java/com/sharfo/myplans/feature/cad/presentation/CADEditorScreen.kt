@@ -177,7 +177,7 @@ fun CADEditorScreen(
                 state.walls.forEach { wall ->
                     val startScr = rulerEngine.worldToScreen(wall.start, size.width, size.height)
                     val endScr = rulerEngine.worldToScreen(wall.end, size.width, size.height)
-                    val strokeW = (wall.thicknessCm / 100.0 * zoom).toFloat().coerceAtLeast(3f)
+                    val strokeW = ((wall.thicknessCm / 100.0) * zoom).toFloat().coerceAtLeast(3f)
 
                     drawLine(
                         color = Color(0xFF90CAF9),
@@ -186,7 +186,7 @@ fun CADEditorScreen(
                         strokeWidth = strokeW
                     )
 
-                    val lengthM = round(wall.lengthMeters * 100) / 100.0
+                    val lengthM = round(wall.start.distanceTo(wall.end) * 100) / 100.0
                     drawContext.canvas.nativeCanvas.drawText(
                         "$lengthM م",
                         ((startScr.x + endScr.x) / 2f).toFloat(),
