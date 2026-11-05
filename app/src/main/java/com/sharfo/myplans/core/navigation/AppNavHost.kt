@@ -9,7 +9,7 @@ import androidx.navigation.navArgument
 import com.sharfo.myplans.feature.cad.presentation.CADEditorScreen
 import com.sharfo.myplans.feature.home.HomeScreen
 import com.sharfo.myplans.feature.preview.PlanPreviewScreen
-import com.sharfo.myplans.feature.wizard.ProjectWizardScreen
+import com.sharfo.myplans.feature.wizard.WizardScreen
 
 @Composable
 fun AppNavHost() {
@@ -26,7 +26,7 @@ fun AppNavHost() {
             )
         }
         composable(Screen.Wizard.route) {
-            ProjectWizardScreen(
+            WizardScreen(
                 onBack = { navController.popBackStack() },
                 onPlanGenerated = { projectId ->
                     navController.navigate(Screen.Preview.createRoute(projectId)) {
