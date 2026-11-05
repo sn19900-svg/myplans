@@ -186,7 +186,11 @@ fun CADEditorScreen(
                         strokeWidth = strokeW
                     )
 
-                    val lengthM = round(wall.start.distanceTo(wall.end) * 100) / 100.0
+                    val dx = wall.end.x - wall.start.x
+                    val dy = wall.end.y - wall.start.y
+                    val lengthVal = kotlin.math.sqrt(dx * dx + dy * dy)
+                    val lengthM = round(lengthVal * 100) / 100.0
+                    
                     drawContext.canvas.nativeCanvas.drawText(
                         "$lengthM م",
                         ((startScr.x + endScr.x) / 2f).toFloat(),
