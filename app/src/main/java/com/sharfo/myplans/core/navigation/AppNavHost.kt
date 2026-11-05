@@ -6,9 +6,10 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.sharfo.myplans.feature.cad.presentation.CADEditorScreen
 import com.sharfo.myplans.feature.home.HomeScreen
 import com.sharfo.myplans.feature.preview.PlanPreviewScreen
-import com.sharfo.myplans.feature.wizard.WizardScreen
+import com.sharfo.myplans.feature.wizard.ProjectWizardScreen
 
 @Composable
 fun AppNavHost() {
@@ -20,15 +21,15 @@ fun AppNavHost() {
     ) {
         composable(Screen.Home.route) {
             HomeScreen(
-                onCreateNew = { navController.navigate(Screen.Wizard.route) },
-                onOpenProject = { id -> navController.navigate(Screen.Preview.createRoute(id)) }
+                onNavigateToWizard = { navController.navigate(Screen.Wizard.route) },
+                onNavigateToPreview = { projectId -> navController.navigate(Screen.Preview.createRoute(projectId)) }
             )
         }
         composable(Screen.Wizard.route) {
-            WizardScreen(
+            ProjectWizardScreen(
                 onBack = { navController.popBackStack() },
-                onPlanGenerated = { id ->
-                    navController.navigate(Screen.Preview.createRoute(id)) {
+                onPlanGenerated = { projectId ->
+                    navController.navigate(Screen.Preview.createRoute(projectId)) {
                         popUpTo(Screen.Home.route)
                     }
                 }
@@ -39,6 +40,12 @@ fun AppNavHost() {
             arguments = listOf(navArgument("projectId") { type = NavType.LongType })
         ) {
             PlanPreviewScreen(
+                onBack = { navController.popBackStack() },
+                onOpenCadEditor = { navController.navigate(Screen.CadEditor.route) }
+            )
+        }
+        composable(Screen.CadEditor.route) {
+            CADEditorScreen(
                 onBack = { navController.popBackStack() }
             )
         }

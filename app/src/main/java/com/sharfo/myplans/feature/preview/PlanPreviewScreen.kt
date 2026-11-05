@@ -5,55 +5,25 @@ import android.content.Intent
 import android.graphics.Paint
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.sharfo.myplans.domain.model.WallLine
 import java.io.File
 import kotlin.math.min
 
@@ -61,15 +31,12 @@ import kotlin.math.min
 @Composable
 fun PlanPreviewScreen(
     onBack: () -> Unit,
+    onOpenCadEditor: () -> Unit,
     viewModel: PlanPreviewViewModel = hiltViewModel()
 ) {
     val project by viewModel.project.collectAsState()
     val context = LocalContext.current
     var showStructuralAxes by remember { mutableStateOf(true) }
-    var isManualDrawingMode by remember { mutableStateOf(false) }
-
-    // قائمة تخزين الخطوط المرسومة يدوياً في الجلسة الحالية
-    val manualWalls = remember { mutableStateListOf<WallLine>() }
 
     Scaffold(
         topBar = {
@@ -116,51 +83,36 @@ fun PlanPreviewScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (isManualDrawingMode) "وضع الرسم اليدوي للجدران" else "المسقط الهندسي التلقائي",
+                        text = "المسقط الهندسي التلقائي",
                         style = MaterialTheme.typography.titleMedium
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        FilterChip(
-                            selected = isManualDrawingMode,
-                            onClick = { isManualDrawingMode = !isManualDrawingMode },
-                            label = { Text(if (isManualDrawingMode) "الوضع التلقائي" else "✏️ رسم يدوي") }
-                        )
+                    // زر الانتقال إلى شاشة الرسم الهندسي الاحترافي CAD
+                    Button(
+                        onClick = onOpenCadEditor,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                    ) {
+                        Text("✏️ رسم يدوي (CAD)")
                     }
                 }
 
-                if (isManualDrawingMode) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("ارسم الجدران بإصبعك داخل اللوحة أدناه:", style = MaterialTheme.typography.bodyMedium)
-                        IconButton(onClick = { manualWalls.clear() }) {
-                            Icon(Icons.Default.Delete, contentDescription = "مسح الرسومات", tint = Color.Red)
-                        }
-                    }
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        FilterChip(
-                            selected = showStructuralAxes,
-                            onClick = { showStructuralAxes = !showStructuralAxes },
-                            label = { Text(if (showStructuralAxes) "إخفاء المحاور" else "إظهار المحاور") }
-                        )
-                    }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    FilterChip(
+                        selected = showStructuralAxes,
+                        onClick = { showStructuralAxes = !showStructuralAxes },
+                        label = { Text(if (showStructuralAxes) "إخفاء المحاور" else "إظهار المحاور") }
+                    )
                 }
 
-                // لوحة الرسم التفاعلية
+                // لوحة المعاينة التلقائية
                 InteractiveBlueprintCanvas(
                     project = current,
-                    showStructural = showStructuralAxes,
-                    isDrawingMode = isManualDrawingMode,
-                    manualWalls = manualWalls
+                    showStructural = showStructuralAxes
                 )
 
-                // أزرار التصدير الثلاثة (DXF, PDF, Excel)
+                // أزرار التصدير (DXF, PDF, Excel)
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(16.dp),
@@ -246,13 +198,8 @@ fun PlanPreviewScreen(
 @Composable
 private fun InteractiveBlueprintCanvas(
     project: com.sharfo.myplans.domain.model.ProjectPlan,
-    showStructural: Boolean,
-    isDrawingMode: Boolean,
-    manualWalls: MutableList<WallLine>
+    showStructural: Boolean
 ) {
-    var currentLineStart by remember { mutableStateOf<Offset?>(null) }
-    var currentLineEnd by remember { mutableStateOf<Offset?>(null) }
-
     val textPaint = remember {
         Paint().apply {
             color = android.graphics.Color.WHITE
@@ -268,32 +215,6 @@ private fun InteractiveBlueprintCanvas(
             .height(380.dp)
             .background(Color(0xFF0A274E))
             .padding(12.dp)
-            .pointerInput(isDrawingMode) {
-                if (isDrawingMode) {
-                    detectDragGestures(
-                        onDragStart = { offset ->
-                            currentLineStart = offset
-                            currentLineEnd = offset
-                        },
-                        onDrag = { change, _ ->
-                            currentLineEnd = change.position
-                        },
-                        onDragEnd = {
-                            val start = currentLineStart
-                            val end = currentLineEnd
-                            if (start != null && end != null) {
-                                manualWalls.add(WallLine(start.x, start.y, end.x, end.y))
-                            }
-                            currentLineStart = null
-                            currentLineEnd = null
-                        },
-                        onDragCancel = {
-                            currentLineStart = null
-                            currentLineEnd = null
-                        }
-                    )
-                }
-            }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val pad = 24f
@@ -306,69 +227,42 @@ private fun InteractiveBlueprintCanvas(
             val offsetX = (size.width - project.generated.plotWidthM.toFloat() * scale) / 2f
             val offsetY = (size.height - project.generated.plotDepthM.toFloat() * scale) / 2f
 
-            // 1. رسم الغرف التلقائية إذا لم يكن في وضع الرسم اليدوي المحض
-            if (!isDrawingMode) {
-                project.generated.rooms.forEach { room ->
-                    val rx = offsetX + room.x.toFloat() * scale
-                    val ry = offsetY + room.y.toFloat() * scale
-                    val rw = room.width.toFloat() * scale
-                    val rh = room.height.toFloat() * scale
+            project.generated.rooms.forEach { room ->
+                val rx = offsetX + room.x.toFloat() * scale
+                val ry = offsetY + room.y.toFloat() * scale
+                val rw = room.width.toFloat() * scale
+                val rh = room.height.toFloat() * scale
 
-                    drawRect(
-                        color = Color(0xFF1E56A0),
-                        topLeft = Offset(rx, ry),
-                        size = Size(rw, rh)
-                    )
-                    drawRect(
-                        color = Color.White,
-                        topLeft = Offset(rx, ry),
-                        size = Size(rw, rh),
-                        style = Stroke(width = 3f)
-                    )
+                drawRect(
+                    color = Color(0xFF1E56A0),
+                    topLeft = Offset(rx, ry),
+                    size = Size(rw, rh)
+                )
+                drawRect(
+                    color = Color.White,
+                    topLeft = Offset(rx, ry),
+                    size = Size(rw, rh),
+                    style = Stroke(width = 3f)
+                )
 
-                    drawContext.canvas.nativeCanvas.drawText(
-                        room.name,
-                        rx + rw / 2f,
-                        ry + rh / 2f,
-                        textPaint
-                    )
-                }
-
-                if (showStructural) {
-                    project.generated.columns.forEach { col ->
-                        val cx = offsetX + col.x.toFloat() * scale
-                        val cy = offsetY + col.y.toFloat() * scale
-                        drawRect(
-                            color = Color(0xFFFFB300),
-                            topLeft = Offset(cx - 6f, cy - 6f),
-                            size = Size(12f, 12f)
-                        )
-                    }
-                }
-            }
-
-            // 2. رسم الجدران اليدوية التي رسمها المستخدم
-            manualWalls.forEach { wall ->
-                drawLine(
-                    color = Color(0xFFFFD54F),
-                    start = Offset(wall.startX, wall.startY),
-                    end = Offset(wall.endX, wall.endY),
-                    strokeWidth = 6f,
-                    cap = StrokeCap.Round
+                drawContext.canvas.nativeCanvas.drawText(
+                    room.name,
+                    rx + rw / 2f,
+                    ry + rh / 2f,
+                    textPaint
                 )
             }
 
-            // رسم الخط الحالي أثناء السحب
-            val start = currentLineStart
-            val end = currentLineEnd
-            if (start != null && end != null) {
-                drawLine(
-                    color = Color(0xFFFF5252),
-                    start = start,
-                    end = end,
-                    strokeWidth = 6f,
-                    cap = StrokeCap.Round
-                )
+            if (showStructural) {
+                project.generated.columns.forEach { col ->
+                    val cx = offsetX + col.x.toFloat() * scale
+                    val cy = offsetY + col.y.toFloat() * scale
+                    drawRect(
+                        color = Color(0xFFFFB300),
+                        topLeft = Offset(cx - 6f, cy - 6f),
+                        size = Size(12f, 12f)
+                    )
+                }
             }
         }
     }
