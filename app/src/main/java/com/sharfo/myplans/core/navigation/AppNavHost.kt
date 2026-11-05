@@ -21,8 +21,8 @@ fun AppNavHost() {
     ) {
         composable(Screen.Home.route) {
             HomeScreen(
-                onCreateNew = { navController.navigate(Screen.Wizard.route) },
-                onOpenProject = { projectId -> navController.navigate(Screen.Preview.createRoute(projectId)) }
+                onNavigateToWizard = { navController.navigate(Screen.Wizard.route) },
+                onNavigateToPreview = { projectId -> navController.navigate(Screen.Preview.createRoute(projectId)) }
             )
         }
         composable(Screen.Wizard.route) {
