@@ -222,7 +222,7 @@ fun CADEditorScreen(
                     }
                     drawRect(Color(0xCC001F3F), topLeft = Offset(0f, 0f), size = Size(size.width, 35f))
                     var wx = centerX % gridStep
-                    var worldVal = -panX / zoom
+                    var worldVal = (-panX / zoom).toDouble()
                     while (wx < size.width) {
                         drawLine(Color.White, Offset(wx, 0f), Offset(wx, 15f), 1f)
                         drawContext.canvas.nativeCanvas.drawText(
