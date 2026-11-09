@@ -88,7 +88,7 @@ class PdfExporter @Inject constructor() {
             val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.BLACK }
 
             c.save()
-            c.clipRect(margin, margin, pageW - margin, pageH - margin - titleH)
+            c.clipRect(margin.toFloat(), margin.toFloat(), (pageW - margin).toFloat(), (pageH - margin - titleH).toFloat())
             for (e in entities) {
                 when (e) {
                     is Wall -> {
