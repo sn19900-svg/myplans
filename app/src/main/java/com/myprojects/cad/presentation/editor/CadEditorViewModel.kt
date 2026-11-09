@@ -380,6 +380,15 @@ class CadEditorViewModel @Inject constructor(
         }
     }
 
+    /** Lengths (m) of the selected walls/lines, in drawing order — used to pre-fill the beam study. */
+    fun selectedSpanLengths(): List<Double> = _state.value.selected.mapNotNull { e ->
+        when (e) {
+            is Wall -> e.length
+            is LineEntity -> e.start.distanceTo(e.end)
+            else -> null
+        }
+    }.map { Math.round(it * 1000.0) / 1000.0 }
+
     // ---- Text ---------------------------------------------------------------------------------------
 
     fun confirmText(text: String, heightM: Double) {

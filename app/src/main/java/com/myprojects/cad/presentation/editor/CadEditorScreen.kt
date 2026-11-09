@@ -58,6 +58,7 @@ import com.myprojects.cad.data.dxf.DxfUnit
 import com.myprojects.cad.data.export.PaperSize
 import com.myprojects.cad.domain.model.ProjectInfo
 import com.myprojects.cad.domain.model.WallThickness
+import com.myprojects.cad.presentation.beam.BeamStudyScreen
 import com.myprojects.cad.core.engine.SnapType
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -79,6 +80,8 @@ fun CadEditorScreen(viewModel: CadEditorViewModel = hiltViewModel()) {
     var exportUnit by remember { mutableStateOf(DxfUnit.METERS) }
     var importUnit by remember { mutableStateOf<Double?>(null) }
     var paper by remember { mutableStateOf(PaperSize.A3) }
+    var showBeam by remember { mutableStateOf(false) }
+    var beamSpans by remember { mutableStateOf(emptyList<Double>()) }
 
     val dxfExport = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream")
@@ -95,6 +98,11 @@ fun CadEditorScreen(viewModel: CadEditorViewModel = hiltViewModel()) {
             snackbar.showSnackbar(it)
             viewModel.consumeMessage()
         }
+    }
+
+    if (showBeam) {
+        BeamStudyScreen(onBack = { showBeam = false }, initialSpans = beamSpans)
+        return
     }
 
     val fileBase = state.projectName.map { if (it.isLetterOrDigit() || it == '-' || it == '_') it else '_' }
@@ -123,6 +131,7 @@ fun CadEditorScreen(viewModel: CadEditorViewModel = hiltViewModel()) {
                             MenuEntry("Rename…", { menuOpen = false }) { dialog = Dialog.RENAME }
                             MenuEntry("Import DXF…", { menuOpen = false }) { dialog = Dialog.IMPORT_DXF }
                             MenuEntry("Export DXF…", { menuOpen = false }) { dialog = Dialog.EXPORT_DXF }
+                            MenuEntry("Beam study…", { menuOpen = false }) { beamSpans = viewModel.selectedSpanLengths(); showBeam = true }
                             MenuEntry("Export PDF…", { menuOpen = false }) { dialog = Dialog.EXPORT_PDF }
                             MenuEntry("Clear drawing", { menuOpen = false }) { dialog = Dialog.CONFIRM_CLEAR }
                         }

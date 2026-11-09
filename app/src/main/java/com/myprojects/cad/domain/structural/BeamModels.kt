@@ -1,0 +1,142 @@
+package com.myprojects.cad.domain.structural
+
+/** Units everywhere in this package: m, mm, MPa, kN, kN·m. */
+enum class BeamType(val label: String) {
+    SIMPLY_SUPPORTED("Simply supported"),
+    CANTILEVER("Cantilever"),
+    CONTINUOUS("Continuous")
+}
+
+/** Point load on a span. [posM] is measured from the left end of that span. Loads act downward. */
+data class BeamPointLoad(
+    val spanIndex: Int,
+    val posM: Double,
+    val deadKn: Double,
+    val liveKn: Double
+)
+
+data class BeamInput(
+    val type: BeamType,
+    val spansM: List<Double>,
+    /** Superimposed dead load per span (kN/m), WITHOUT the beam's own weight. */
+    val deadKnPerM: List<Double>,
+    val liveKnPerM: List<Double>,
+    val pointLoads: List<BeamPointLoad> = emptyList(),
+    val bMm: Double = 250.0,
+    val hMm: Double = 500.0,
+    val fcMpa: Double = 25.0,
+    val fyMpa: Double = 420.0,
+    val fytMpa: Double = 420.0,
+    val coverMm: Double = 40.0,
+    val stirrupDiaMm: Double = 10.0,
+    val barDiaMm: Double = 16.0,
+    val supportWidthMm: Double = 250.0,
+    val includeSelfWeight: Boolean = true,
+    val deadFactor: Double = 1.2,
+    val liveFactor: Double = 1.6
+) {
+    /** Reinforced-concrete unit weight 25 kN/m³. */
+    val selfWeightKnPerM: Double
+        get() = if (includeSelfWeight) 25.0 * (bMm / 1000.0) * (hMm / 1000.0) else 0.0
+
+    /** Returns a human-readable problem, or null when the input is usable. */
+    fun validate(): String? {
+        val n = spansM.size
+        if (n == 0) return "Add at least one span"
+        if (type != BeamType.CONTINUOUS && n != 1) return "${type.label} beams have exactly one span"
+        if (type == BeamType.CONTINUOUS && n < 2) return "A continuous beam needs at least two spans"
+        if (n > 8) return "Up to 8 spans are supported"
+        if (deadKnPerM.size != n || liveKnPerM.size != n) return "Loads must match the number of spans"
+        if (spansM.any { !it.isFinite() || it < 0.3 || it > 30.0 }) return "Each span must be between 0.3 m and 30 m"
+        if (deadKnPerM.any { !it.isFinite() || it < 0.0 } || liveKnPerM.any { !it.isFinite() || it < 0.0 }) {
+            return "Loads must be zero or positive"
+        }
+        for (p in pointLoads) {
+            if (p.spanIndex !in 0 until n) return "A point load refers to a span that does not exist"
+            if (!p.posM.isFinite() || p.posM < 0.0 || p.posM > spansM[p.spanIndex]) {
+                return "Point load position must lie inside its span"
+            }
+            if (!p.deadKn.isFinite() || !p.liveKn.isFinite() || p.deadKn < 0.0 || p.liveKn < 0.0) {
+                return "Point loads must be zero or positive"
+            }
+        }
+        if (bMm !in 100.0..1500.0) return "Width b must be between 100 and 1500 mm"
+        if (hMm !in 150.0..2500.0) return "Depth h must be between 150 and 2500 mm"
+        if (fcMpa !in 15.0..80.0) return "f'c must be between 15 and 80 MPa"
+        if (fyMpa !in 240.0..600.0 || fytMpa !in 240.0..600.0) return "Steel yield strength must be 240–600 MPa"
+        if (coverMm !in 15.0..100.0) return "Cover must be between 15 and 100 mm"
+        if (stirrupDiaMm !in 6.0..20.0) return "Stirrup diameter must be 6–20 mm"
+        if (barDiaMm !in 10.0..40.0) return "Bar diameter must be 10–40 mm"
+        if (supportWidthMm !in 0.0..1500.0) return "Support width must be 0–1500 mm"
+        if (deadFactor !in 1.0..3.0 || liveFactor !in 1.0..3.0) return "Load factors must be between 1.0 and 3.0"
+        if (hMm - coverMm - stirrupDiaMm - barDiaMm - 12.5 < 50.0) return "Depth is too small for this cover and bar size"
+        return null
+    }
+}
+
+// ---- Results -----------------------------------------------------------------------------------------
+
+data class SupportReaction(
+    val label: String,
+    val xM: Double,
+    val deadKn: Double,
+    val liveKn: Double,
+    val ultimateMaxKn: Double
+)
+
+data class FlexureDesign(
+    val label: String,
+    val xM: Double,
+    val muKnM: Double,
+    val dMm: Double,
+    val asReqMm2: Double,
+    val asMinMm2: Double,
+    val asProvMm2: Double,
+    val bars: Int,
+    val barDiaMm: Int,
+    val layers: Int,
+    val phiMnKnM: Double,
+    val ok: Boolean,
+    val note: String?
+) {
+    val barsText: String get() = if (bars > 0) "${bars}Φ$barDiaMm" else "—"
+}
+
+data class ShearDesign(
+    val label: String,
+    val vuKn: Double,
+    val dMm: Double,
+    val phiVcKn: Double,
+    val s1Mm: Double,
+    val s2Mm: Double,
+    val zoneLengthM: Double,
+    val stirrupText: String,
+    val ok: Boolean,
+    val note: String?
+)
+
+data class DeflectionRow(
+    val label: String,
+    val spanM: Double,
+    val liveMm: Double,
+    val afterAttachmentMm: Double,
+    val liveLimitMm: Double,
+    val limit480Mm: Double,
+    val limit240Mm: Double,
+    val status: String,
+    val ok: Boolean
+)
+
+data class HMinRow(val label: String, val spanM: Double, val hMinMm: Double, val ok: Boolean)
+
+data class BeamDesign(
+    val flexure: List<FlexureDesign>,
+    val shear: List<ShearDesign>,
+    val deflection: List<DeflectionRow>,
+    val hMin: List<HMinRow>,
+    val ieScale: Double,
+    val deflectionNote: String,
+    val warnings: List<String>
+) {
+    val allOk: Boolean get() = flexure.all { it.ok } && shear.all { it.ok } && warnings.isEmpty()
+}
