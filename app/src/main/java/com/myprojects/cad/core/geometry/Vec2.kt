@@ -15,10 +15,18 @@ data class Vec2(val x: Double, val y: Double) {
 
     val length: Double get() = hypot(x, y)
 
+    fun dot(o: Vec2): Double = x * o.x + y * o.y
+    fun cross(o: Vec2): Double = x * o.y - y * o.x
     fun distanceTo(o: Vec2): Double = (this - o).length
     fun midpoint(o: Vec2) = Vec2((x + o.x) / 2.0, (y + o.y) / 2.0)
     fun perpLeft() = Vec2(-y, x)
     fun angleRad(): Double = atan2(y, x)
+
+    fun rotated(rad: Double): Vec2 {
+        val c = cos(rad)
+        val s = sin(rad)
+        return Vec2(x * c - y * s, x * s + y * c)
+    }
 
     fun normalized(): Vec2 {
         val l = length

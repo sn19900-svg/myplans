@@ -1,12 +1,16 @@
 package com.myprojects.cad.presentation.editor
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
@@ -21,6 +25,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -30,18 +35,42 @@ import com.myprojects.cad.core.engine.SnapType
 import com.myprojects.cad.core.engine.Viewport
 import com.myprojects.cad.core.geometry.Units
 import com.myprojects.cad.core.geometry.Vec2
+import com.myprojects.cad.domain.model.ArcEntity
+import com.myprojects.cad.domain.model.CadEntity
+import com.myprojects.cad.domain.model.CircleEntity
+import com.myprojects.cad.domain.model.DimensionEntity
+import com.myprojects.cad.domain.model.LineEntity
+import com.myprojects.cad.domain.model.PolylineEntity
+import com.myprojects.cad.domain.model.TextEntity
 import com.myprojects.cad.domain.model.Wall
+import com.myprojects.cad.domain.model.geometry
 import kotlin.math.atan2
 import kotlin.math.ceil
 import kotlin.math.floor
 
 internal fun Vec2.toOffset() = Offset(x.toFloat(), y.toFloat())
 
+private enum class DrawMode { NORMAL, SELECTED, PREVIEW }
+
+private class Palette(
+    val wallFill: Color,
+    val wallEdge: Color,
+    val line: Color,
+    val dim: Color,
+    val selected: Color,
+    val preview: Color
+)
+
+/**
+ * One-finger drag: moves the crosshair like a trackpad (or pans in the Pan tool). Tap: puts the crosshair there.
+ * Two fingers: pan + zoom, always.
+ */
 @Composable
 fun CadCanvas(
     state: EditorUiState,
     onSizeChanged: (Int, Int) -> Unit,
     onTransform: (Vec2, Vec2, Double) -> Unit,
+    onCursorDelta: (Double, Double) -> Unit,
     onTap: (Vec2) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -49,8 +78,14 @@ fun CadCanvas(
     val background = scheme.surface
     val minorGrid = scheme.outlineVariant.copy(alpha = 0.35f)
     val majorGrid = scheme.outline.copy(alpha = 0.55f)
-    val wallFill = scheme.onSurface.copy(alpha = 0.85f)
-    val wallEdge = scheme.onSurface
+    val palette = Palette(
+        wallFill = scheme.onSurface.copy(alpha = 0.8f),
+        wallEdge = scheme.onSurface,
+        line = scheme.onSurface,
+        dim = scheme.tertiary,
+        selected = Color(0xFFFF6D00),
+        preview = scheme.primary
+    )
     val accent = scheme.primary
     val axisXColor = Color(0xFFD32F2F)
     val axisYColor = Color(0xFF388E3C)
@@ -62,22 +97,64 @@ fun CadCanvas(
         }
     }
 
+    val isPan by rememberUpdatedState(state.tool == EditorTool.PAN)
+    val currentTransform by rememberUpdatedState(onTransform)
+    val currentCursorDelta by rememberUpdatedState(onCursorDelta)
+    val currentTap by rememberUpdatedState(onTap)
+
     Canvas(
         modifier = modifier
             .fillMaxSize()
             .clipToBounds()
             .onSizeChanged { onSizeChanged(it.width, it.height) }
             .pointerInput(Unit) {
-                detectTransformGestures { centroid, pan, zoom, _ ->
-                    onTransform(
-                        Vec2(centroid.x.toDouble(), centroid.y.toDouble()),
-                        Vec2(pan.x.toDouble(), pan.y.toDouble()),
-                        zoom.toDouble()
-                    )
+                val slop = viewConfiguration.touchSlop
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var multi = false
+                    var moved = false
+                    var total = Offset.Zero
+                    do {
+                        val event = awaitPointerEvent()
+                        val pressedCount = event.changes.count { it.pressed }
+                        if (pressedCount >= 2) {
+                            multi = true
+                            val zoom = event.calculateZoom()
+                            val pan = event.calculatePan()
+                            val centroid = event.calculateCentroid(useCurrent = true)
+                            if (zoom != 1f || pan != Offset.Zero) {
+                                currentTransform(
+                                    Vec2(centroid.x.toDouble(), centroid.y.toDouble()),
+                                    Vec2(pan.x.toDouble(), pan.y.toDouble()),
+                                    zoom.toDouble()
+                                )
+                            }
+                            event.changes.forEach { it.consume() }
+                        } else if (!multi) {
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: event.changes.first()
+                            val delta = change.positionChange()
+                            total += delta
+                            val wasMoved = moved
+                            if (!moved && total.getDistance() > slop) moved = true
+                            if (moved) {
+                                val d = if (wasMoved) delta else total
+                                if (isPan) {
+                                    currentTransform(
+                                        Vec2(change.position.x.toDouble(), change.position.y.toDouble()),
+                                        Vec2(d.x.toDouble(), d.y.toDouble()),
+                                        1.0
+                                    )
+                                } else {
+                                    currentCursorDelta(d.x.toDouble(), d.y.toDouble())
+                                }
+                                change.consume()
+                            }
+                        }
+                    } while (event.changes.any { it.pressed })
+                    if (!multi && !moved) {
+                        currentTap(Vec2(down.position.x.toDouble(), down.position.y.toDouble()))
+                    }
                 }
-            }
-            .pointerInput(Unit) {
-                detectTapGestures { p -> onTap(Vec2(p.x.toDouble(), p.y.toDouble())) }
             }
     ) {
         val vp = state.viewport
@@ -85,20 +162,21 @@ fun CadCanvas(
         drawGrid(vp, minorGrid, majorGrid)
         drawAxes(vp, axisXColor, axisYColor)
 
-        state.walls.forEach { drawWall(vp, it, wallFill, wallEdge) }
-        state.numericPreview?.let { drawWallPreview(vp, it, accent) }
-
         labelPaint.textSize = 12.sp.toPx()
         labelPaint.color = accent.toArgb()
-        state.walls.forEach { drawDimension(vp, it, labelPaint) }
-        state.numericPreview?.let { drawDimension(vp, it, labelPaint) }
 
-        state.pendingStart?.let { drawPendingMarker(vp, it, accent) }
-        state.cursor?.let { drawSnapMarker(vp, it, accent) }
+        for (e in state.entities) {
+            val mode = if (e.id in state.selectedIds) DrawMode.SELECTED else DrawMode.NORMAL
+            drawEntity(vp, e, palette, mode, labelPaint)
+        }
+        for (e in state.preview) drawEntity(vp, e, palette, DrawMode.PREVIEW, labelPaint)
+
+        for (p in state.points) drawPendingMarker(vp, p, accent)
+        state.cursor?.let { drawCrosshair(vp, it, accent) }
     }
 }
 
-// ---- Grid & axes ----------------------------------------------------------------------------
+// ---- Grid & axes ----------------------------------------------------------------------------------
 
 private fun DrawScope.drawGrid(vp: Viewport, minorColor: Color, majorColor: Color) {
     val bounds = vp.visibleBounds(size.width.toDouble(), size.height.toDouble())
@@ -109,13 +187,11 @@ private fun DrawScope.drawGrid(vp: Viewport, minorColor: Color, majorColor: Colo
 
     for (i in floor(bounds.minX / spacing).toLong()..ceil(bounds.maxX / spacing).toLong()) {
         val sx = vp.worldToScreenX(i * spacing).toFloat()
-        val major = i % subs == 0L
-        drawLine(if (major) majorColor else minorColor, Offset(sx, 0f), Offset(sx, size.height), 1f)
+        drawLine(if (i % subs == 0L) majorColor else minorColor, Offset(sx, 0f), Offset(sx, size.height), 1f)
     }
     for (j in floor(bounds.minY / spacing).toLong()..ceil(bounds.maxY / spacing).toLong()) {
         val sy = vp.worldToScreenY(j * spacing).toFloat()
-        val major = j % subs == 0L
-        drawLine(if (major) majorColor else minorColor, Offset(0f, sy), Offset(size.width, sy), 1f)
+        drawLine(if (j % subs == 0L) majorColor else minorColor, Offset(0f, sy), Offset(size.width, sy), 1f)
     }
 }
 
@@ -126,65 +202,146 @@ private fun DrawScope.drawAxes(vp: Viewport, xColor: Color, yColor: Color) {
     drawLine(yColor, Offset(sx, 0f), Offset(sx, size.height), 2f)
 }
 
-// ---- Walls ----------------------------------------------------------------------------------
+// ---- Entities -------------------------------------------------------------------------------------
 
-/** Wall as a thick quad (true thickness in world units, so it scales with zoom). */
 private fun wallScreenPath(vp: Viewport, wall: Wall): Path {
-    val dir = (wall.end - wall.start).normalized()
-    val n = dir.perpLeft() * (wall.thicknessM / 2.0)
-    val p1 = vp.worldToScreen(wall.start + n).toOffset()
-    val p2 = vp.worldToScreen(wall.end + n).toOffset()
-    val p3 = vp.worldToScreen(wall.end - n).toOffset()
-    val p4 = vp.worldToScreen(wall.start - n).toOffset()
+    val c = wall.corners().map { vp.worldToScreen(it).toOffset() }
     return Path().apply {
-        moveTo(p1.x, p1.y)
-        lineTo(p2.x, p2.y)
-        lineTo(p3.x, p3.y)
-        lineTo(p4.x, p4.y)
+        moveTo(c[0].x, c[0].y)
+        lineTo(c[1].x, c[1].y)
+        lineTo(c[2].x, c[2].y)
+        lineTo(c[3].x, c[3].y)
         close()
     }
 }
 
-private fun DrawScope.drawWall(vp: Viewport, wall: Wall, fill: Color, edge: Color) {
-    val path = wallScreenPath(vp, wall)
-    drawPath(path, fill)
-    drawPath(path, edge, style = Stroke(width = 1.5.dp.toPx()))
+private fun DrawScope.drawEntity(
+    vp: Viewport, e: CadEntity, pal: Palette, mode: DrawMode, labelPaint: android.graphics.Paint
+) {
+    val color = when (mode) {
+        DrawMode.NORMAL -> if (e is DimensionEntity) pal.dim else pal.line
+        DrawMode.SELECTED -> pal.selected
+        DrawMode.PREVIEW -> pal.preview
+    }
+    val width = (if (mode == DrawMode.SELECTED) 2.5.dp else 1.5.dp).toPx()
+    val dash = if (mode == DrawMode.PREVIEW) PathEffect.dashPathEffect(floatArrayOf(12f, 8f)) else null
+    val stroke = Stroke(width = width, pathEffect = dash)
+
+    when (e) {
+        is Wall -> {
+            val path = wallScreenPath(vp, e)
+            val fill = when (mode) {
+                DrawMode.NORMAL -> pal.wallFill
+                DrawMode.SELECTED -> pal.selected.copy(alpha = 0.55f)
+                DrawMode.PREVIEW -> pal.preview.copy(alpha = 0.25f)
+            }
+            drawPath(path, fill)
+            drawPath(path, if (mode == DrawMode.NORMAL) pal.wallEdge else color, style = stroke)
+            drawLengthLabel(vp, e.start, e.end, e.thicknessM, labelPaint)
+        }
+        is LineEntity -> {
+            drawLine(
+                color = color, start = vp.worldToScreen(e.start).toOffset(), end = vp.worldToScreen(e.end).toOffset(),
+                strokeWidth = width, pathEffect = dash
+            )
+            if (mode == DrawMode.PREVIEW) drawLengthLabel(vp, e.start, e.end, 0.0, labelPaint)
+        }
+        is PolylineEntity -> {
+            if (e.points.size >= 2) {
+                val path = Path()
+                e.points.forEachIndexed { i, p ->
+                    val o = vp.worldToScreen(p).toOffset()
+                    if (i == 0) path.moveTo(o.x, o.y) else path.lineTo(o.x, o.y)
+                }
+                if (e.closed) path.close()
+                drawPath(path, color, style = stroke)
+            }
+        }
+        is CircleEntity -> {
+            val c = vp.worldToScreen(e.center).toOffset()
+            drawCircle(color = color, radius = (e.radius * vp.scale).toFloat(), center = c, style = stroke)
+        }
+        is ArcEntity -> {
+            val c = vp.worldToScreen(e.center).toOffset()
+            val r = (e.radius * vp.scale).toFloat()
+            drawArc(
+                color = color,
+                startAngle = (-e.endDeg).toFloat(),
+                sweepAngle = e.sweepDeg.toFloat(),
+                useCenter = false,
+                topLeft = Offset(c.x - r, c.y - r),
+                size = Size(2 * r, 2 * r),
+                style = stroke
+            )
+        }
+        is TextEntity -> {
+            val h = (e.heightM * vp.scale).toFloat()
+            if (h >= 5f) {
+                val pos = vp.worldToScreen(e.position).toOffset()
+                val argb = color.toArgb()
+                val paint = android.graphics.Paint(labelPaint).apply {
+                    textSize = h
+                    setColor(argb)
+                    textAlign = android.graphics.Paint.Align.LEFT
+                    isFakeBoldText = false
+                }
+                rotate(degrees = (-e.rotationDeg).toFloat(), pivot = pos) {
+                    drawIntoCanvas { c -> c.nativeCanvas.drawText(e.text, pos.x, pos.y, paint) }
+                }
+            } else {
+                drawCircle(color, radius = 2.dp.toPx(), center = vp.worldToScreen(e.position).toOffset())
+            }
+        }
+        is DimensionEntity -> drawDimension(vp, e, color, width, dash, labelPaint)
+    }
 }
 
-private fun DrawScope.drawWallPreview(vp: Viewport, wall: Wall, color: Color) {
-    val path = wallScreenPath(vp, wall)
-    drawPath(path, color.copy(alpha = 0.25f))
-    drawPath(
-        path,
-        color,
-        style = Stroke(
-            width = 1.5.dp.toPx(),
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f))
-        )
-    )
-}
-
-/** Real-time dimension text, parallel to the wall, offset outside its thickness. */
-private fun DrawScope.drawDimension(vp: Viewport, wall: Wall, paint: android.graphics.Paint) {
-    val a = vp.worldToScreen(wall.start)
-    val b = vp.worldToScreen(wall.end)
-    val dir = b - a
+/** Real-time dimension text, parallel to the segment, offset outside its thickness. */
+private fun DrawScope.drawLengthLabel(
+    vp: Viewport, a: Vec2, b: Vec2, thicknessM: Double, paint: android.graphics.Paint
+) {
+    val sa = vp.worldToScreen(a)
+    val sb = vp.worldToScreen(b)
+    val dir = sb - sa
     if (dir.length < 48.0) return // too short on screen to label
 
     var angle = Math.toDegrees(atan2(dir.y, dir.x))
     if (angle > 90.0) angle -= 180.0 else if (angle < -90.0) angle += 180.0 // keep text upright
 
-    val mid = (a + b) / 2.0
-    val lift = (wall.thicknessM * vp.scale / 2.0).toFloat() + 6.dp.toPx()
-    val text = Units.formatLength(wall.length)
+    val mid = (sa + sb) / 2.0
+    val lift = (thicknessM * vp.scale / 2.0).toFloat() + 6.dp.toPx()
+    val text = Units.formatLength(a.distanceTo(b))
+    paint.textAlign = android.graphics.Paint.Align.CENTER
     rotate(degrees = angle.toFloat(), pivot = mid.toOffset()) {
-        drawIntoCanvas { c ->
-            c.nativeCanvas.drawText(text, mid.x.toFloat(), mid.y.toFloat() - lift, paint)
-        }
+        drawIntoCanvas { c -> c.nativeCanvas.drawText(text, mid.x.toFloat(), mid.y.toFloat() - lift, paint) }
     }
 }
 
-// ---- Markers --------------------------------------------------------------------------------
+private fun DrawScope.drawDimension(
+    vp: Viewport, e: DimensionEntity, color: Color, width: Float, dash: PathEffect?, paint: android.graphics.Paint
+) {
+    val g = e.geometry()
+    fun s(p: Vec2) = vp.worldToScreen(p).toOffset()
+    drawLine(color = color, start = s(g.p1), end = s(g.e1), strokeWidth = width * 0.6f, pathEffect = dash)
+    drawLine(color = color, start = s(g.p2), end = s(g.e2), strokeWidth = width * 0.6f, pathEffect = dash)
+    drawLine(color = color, start = s(g.d1), end = s(g.d2), strokeWidth = width, pathEffect = dash)
+
+    val a = s(g.d1)
+    val b = s(g.d2)
+    val len = (b - a).getDistance()
+    if (len > 1f) {
+        val ux = (b.x - a.x) / len
+        val uy = (b.y - a.y) / len
+        val k = 5.dp.toPx()
+        val tx = (ux - uy) * k
+        val ty = (uy + ux) * k
+        drawLine(color, Offset(a.x - tx, a.y - ty), Offset(a.x + tx, a.y + ty), width)
+        drawLine(color, Offset(b.x - tx, b.y - ty), Offset(b.x + tx, b.y + ty), width)
+    }
+    drawLengthLabel(vp, g.d1, g.d2, 0.0, paint)
+}
+
+// ---- Markers --------------------------------------------------------------------------------------
 
 private fun DrawScope.drawPendingMarker(vp: Viewport, p: Vec2, color: Color) {
     val c = vp.worldToScreen(p).toOffset()
@@ -192,13 +349,22 @@ private fun DrawScope.drawPendingMarker(vp: Viewport, p: Vec2, color: Color) {
     drawCircle(Color.White, radius = 2.dp.toPx(), center = c)
 }
 
-private fun DrawScope.drawSnapMarker(vp: Viewport, snap: SnapResult, color: Color) {
+private fun DrawScope.drawCrosshair(vp: Viewport, snap: SnapResult, color: Color) {
     val c = vp.worldToScreen(snap.point).toOffset()
+    val arm = 16.dp.toPx()
+    val w = 1.5.dp.toPx()
+    drawLine(color, Offset(c.x - arm, c.y), Offset(c.x + arm, c.y), w)
+    drawLine(color, Offset(c.x, c.y - arm), Offset(c.x, c.y + arm), w)
+
     val r = 8.dp.toPx()
     val stroke = Stroke(width = 2.dp.toPx())
     when (snap.type) {
         SnapType.ENDPOINT ->
             drawRect(color, topLeft = Offset(c.x - r, c.y - r), size = Size(2 * r, 2 * r), style = stroke)
+        SnapType.INTERSECTION -> {
+            drawLine(color, Offset(c.x - r, c.y - r), Offset(c.x + r, c.y + r), 2.dp.toPx())
+            drawLine(color, Offset(c.x - r, c.y + r), Offset(c.x + r, c.y - r), 2.dp.toPx())
+        }
         SnapType.MIDPOINT -> {
             val tri = Path().apply {
                 moveTo(c.x, c.y - r)
@@ -208,10 +374,8 @@ private fun DrawScope.drawSnapMarker(vp: Viewport, snap: SnapResult, color: Colo
             }
             drawPath(tri, color, style = stroke)
         }
-        SnapType.GRID -> {
-            drawLine(color, Offset(c.x - r, c.y - r), Offset(c.x + r, c.y + r), 2.dp.toPx())
-            drawLine(color, Offset(c.x - r, c.y + r), Offset(c.x + r, c.y - r), 2.dp.toPx())
-        }
-        SnapType.NONE -> drawCircle(color, radius = r / 2f, center = c, style = stroke)
+        SnapType.CENTER -> drawCircle(color, radius = r, center = c, style = stroke)
+        SnapType.GRID -> drawRect(color, topLeft = Offset(c.x - 3.dp.toPx(), c.y - 3.dp.toPx()), size = Size(6.dp.toPx(), 6.dp.toPx()), style = stroke)
+        SnapType.NONE -> Unit
     }
 }

@@ -4,6 +4,8 @@
     <application
         android:name=".MyProjectsApp"
         android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="مشاريعي"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity

@@ -2,7 +2,6 @@ package com.myprojects.cad.domain.usecase
 
 import com.myprojects.cad.core.geometry.Vec2
 import com.myprojects.cad.domain.model.Wall
-import com.myprojects.cad.domain.repository.CadRepository
 import javax.inject.Inject
 
 /** Builds a wall from explicit numeric input: start point, length (m), angle (deg CCW from east), thickness (m). */
@@ -26,8 +25,4 @@ class CreateWallFromPolarUseCase @Inject constructor() {
         const val MIN_THICKNESS_M = 0.05
         const val MAX_THICKNESS_M = 1.0
     }
-}
-
-class AddWallUseCase @Inject constructor(private val repository: CadRepository) {
-    operator fun invoke(wall: Wall) = repository.addWall(wall)
 }

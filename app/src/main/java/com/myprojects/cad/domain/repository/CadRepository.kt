@@ -1,14 +1,19 @@
 package com.myprojects.cad.domain.repository
 
-import com.myprojects.cad.domain.model.Wall
+import com.myprojects.cad.domain.model.CadEntity
 import kotlinx.coroutines.flow.StateFlow
 
+/** Holds the drawing that is currently open. Every [update] is exactly one undo step. */
 interface CadRepository {
-    val walls: StateFlow<List<Wall>>
+    val entities: StateFlow<List<CadEntity>>
     val canUndo: StateFlow<Boolean>
     val canRedo: StateFlow<Boolean>
-    fun addWall(wall: Wall)
+
+    fun update(transform: (List<CadEntity>) -> List<CadEntity>)
+
+    /** Replaces the whole drawing and clears undo history (used when opening a project). */
+    fun setAll(entities: List<CadEntity>)
+
     fun undo()
     fun redo()
-    fun clear()
 }
