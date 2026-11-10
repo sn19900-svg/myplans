@@ -9,7 +9,8 @@ data class Wall(
     val start: Vec2,
     val end: Vec2,
     val thicknessM: Double,
-    override val layer: String = Layers.WALLS
+    override val layer: String = Layers.WALLS,
+    override val name: String = ""
 ) : CadEntity {
     val length: Double get() = start.distanceTo(end)
     val midpoint: Vec2 get() = start.midpoint(end)

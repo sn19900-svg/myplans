@@ -11,6 +11,7 @@ import com.myprojects.cad.domain.model.PolylineEntity
 import com.myprojects.cad.domain.model.TextEntity
 import com.myprojects.cad.domain.model.Wall
 import com.myprojects.cad.domain.model.geometry
+import com.myprojects.cad.domain.model.labelAnchor
 import com.myprojects.cad.domain.model.worldBounds
 import java.util.Locale
 import kotlin.math.abs
@@ -31,7 +32,8 @@ object DxfWriter {
 
     fun write(entities: List<CadEntity>, unit: DxfUnit): String {
         val out = Out(StringBuilder(), unit.perMeter)
-        val layers = (entities.map { safeLayer(it.layer) } + "0").toSortedSet()
+        val hasLabels = entities.any { it.name.isNotBlank() && it !is TextEntity }
+        val layers = (entities.map { safeLayer(it.layer) } + "0" + (if (hasLabels) listOf("LABELS") else emptyList())).toSortedSet()
 
         out.g(0, "SECTION"); out.g(2, "HEADER")
         out.g(9, "\$ACADVER"); out.g(1, "AC1009")
@@ -56,7 +58,14 @@ object DxfWriter {
         out.g(0, "ENDSEC")
 
         out.g(0, "SECTION"); out.g(2, "ENTITIES")
-        for (e in entities) writeEntity(out, e)
+        for (e in entities) {
+            writeEntity(out, e)
+            if (e.name.isNotBlank() && e !is TextEntity) {
+                // Element marks (B1, W3 …) travel with the drawing on their own layer.
+                val at = e.labelAnchor()
+                out.text("LABELS", Vec2(at.x, at.y - 0.25), 0.15, e.name, 0.0)
+            }
+        }
         out.g(0, "ENDSEC")
         out.g(0, "EOF")
         return out.sb.toString()
@@ -157,6 +166,7 @@ object DxfWriter {
         "WALLS" -> 5
         "DIM" -> 3
         "TEXT" -> 2
+        "LABELS" -> 6
         else -> 7
     }
 }

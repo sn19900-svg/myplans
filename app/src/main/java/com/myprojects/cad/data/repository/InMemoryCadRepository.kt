@@ -1,6 +1,7 @@
 package com.myprojects.cad.data.repository
 
 import com.myprojects.cad.domain.model.CadEntity
+import com.myprojects.cad.domain.structural.StudyRecord
 import com.myprojects.cad.domain.repository.CadRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,6 +19,21 @@ class InMemoryCadRepository @Inject constructor() : CadRepository {
     private val _canRedo = MutableStateFlow(false)
     private val undoStack = ArrayDeque<List<CadEntity>>()
     private val redoStack = ArrayDeque<List<CadEntity>>()
+
+    private val _studies = MutableStateFlow<List<StudyRecord>>(emptyList())
+
+    override val studies: StateFlow<List<StudyRecord>> = _studies.asStateFlow()
+
+    override fun upsertStudy(record: StudyRecord) {
+        synchronized(lock) {
+            val rest = _studies.value.filterNot { it.id == record.id || it.entityIds.toSet() == record.entityIds.toSet() }
+            _studies.value = rest + record
+        }
+    }
+
+    override fun setStudies(list: List<StudyRecord>) {
+        synchronized(lock) { _studies.value = list }
+    }
 
     override val entities: StateFlow<List<CadEntity>> = _entities.asStateFlow()
     override val canUndo: StateFlow<Boolean> = _canUndo.asStateFlow()

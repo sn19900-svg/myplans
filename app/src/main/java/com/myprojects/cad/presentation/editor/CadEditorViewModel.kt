@@ -7,6 +7,7 @@ import com.myprojects.cad.core.engine.SnapEngine
 import com.myprojects.cad.core.engine.SnapResult
 import com.myprojects.cad.core.engine.SnapTargets
 import com.myprojects.cad.core.engine.Viewport
+import com.myprojects.cad.core.engine.WorldRect
 import com.myprojects.cad.core.geometry.Geo
 import com.myprojects.cad.core.geometry.Vec2
 import com.myprojects.cad.data.dxf.DxfReader
@@ -16,6 +17,7 @@ import com.myprojects.cad.data.export.PaperSize
 import com.myprojects.cad.data.export.PdfExporter
 import com.myprojects.cad.data.io.DocumentIO
 import com.myprojects.cad.domain.model.CadEntity
+import com.myprojects.cad.domain.model.ChainBuilder
 import com.myprojects.cad.domain.model.CadProject
 import com.myprojects.cad.domain.model.CircleEntity
 import com.myprojects.cad.domain.model.DimensionEntity
@@ -25,6 +27,14 @@ import com.myprojects.cad.domain.model.TextEntity
 import com.myprojects.cad.domain.model.Wall
 import com.myprojects.cad.domain.model.Xform
 import com.myprojects.cad.domain.model.arcFrom3
+import com.myprojects.cad.domain.model.insideRect
+import com.myprojects.cad.domain.model.kindLabel
+import com.myprojects.cad.domain.model.nextName
+import com.myprojects.cad.domain.model.touchesRect
+import com.myprojects.cad.domain.model.withLayer
+import com.myprojects.cad.domain.model.withName
+import com.myprojects.cad.domain.structural.BeamStudyRequest
+import com.myprojects.cad.domain.structural.StudyRecord
 import com.myprojects.cad.domain.model.dimensionOffset
 import com.myprojects.cad.domain.model.distanceTo
 import com.myprojects.cad.domain.model.offsetBy
@@ -65,22 +75,33 @@ class CadEditorViewModel @Inject constructor(
     private var viewportInitialized = false
     private var snapTargets = SnapTargets()
     private var savedEntities: List<CadEntity> = emptyList()
+    private var savedStudies: List<StudyRecord> = emptyList()
     private var projectCreatedAt = System.currentTimeMillis()
+
+    private data class Snapshot(
+        val entities: List<CadEntity>,
+        val undo: Boolean,
+        val redo: Boolean,
+        val studies: List<StudyRecord>
+    )
 
     init {
         viewModelScope.launch {
-            combine(repository.entities, repository.canUndo, repository.canRedo) { e, u, r ->
-                Triple(e, u, r)
-            }.collect { (entities, undo, redo) ->
-                snapTargets = entities.toSnapTargets()
-                val ids = entities.map { it.id }.toSet()
+            combine(repository.entities, repository.canUndo, repository.canRedo, repository.studies) { e, u, r, st ->
+                Snapshot(e, u, r, st)
+            }.collect { snap ->
+                snapTargets = snap.entities.toSnapTargets()
+                val ids = snap.entities.map { it.id }.toSet()
+                // A study is only shown while every element it was made from still exists.
+                val active = snap.studies.filter { st -> st.entityIds.all { it in ids } }
                 _state.update { s ->
                     s.copy(
-                        entities = entities,
-                        canUndo = undo,
-                        canRedo = redo,
+                        entities = snap.entities,
+                        canUndo = snap.undo,
+                        canRedo = snap.redo,
+                        studies = active,
                         selectedIds = s.selectedIds.intersect(ids),
-                        dirty = entities != savedEntities
+                        dirty = snap.entities != savedEntities || active != savedStudies
                     )
                 }
             }
@@ -110,9 +131,11 @@ class CadEditorViewModel @Inject constructor(
         }
     }
 
-    fun zoomExtents() {
+    fun zoomExtents() = zoomToEntities(repository.entities.value)
+
+    private fun zoomToEntities(list: List<CadEntity>) {
         if (canvasW <= 0.0 || canvasH <= 0.0) return
-        val b = repository.entities.value.worldBounds()
+        val b = list.worldBounds()
         if (b == null) {
             _state.update { it.copy(viewport = Viewport.centered(canvasW, canvasH)) }
             return
@@ -380,14 +403,144 @@ class CadEditorViewModel @Inject constructor(
         }
     }
 
-    /** Lengths (m) of the selected walls/lines, in drawing order — used to pre-fill the beam study. */
-    fun selectedSpanLengths(): List<Double> = _state.value.selected.mapNotNull { e ->
-        when (e) {
-            is Wall -> e.length
-            is LineEntity -> e.start.distanceTo(e.end)
-            else -> null
+    // ---- Selection tools -----------------------------------------------------------------------------------
+
+    /** Drag in the Select tool: left→right = window (fully inside), right→left = crossing (touching). */
+    fun onSelectBox(startPx: Vec2, endPx: Vec2, finished: Boolean) {
+        if (!finished) {
+            _state.update { it.copy(selectBox = SelectBox(startPx, endPx)) }
+            return
         }
-    }.map { Math.round(it * 1000.0) / 1000.0 }
+        val s = _state.value
+        _state.update { it.copy(selectBox = null) }
+        val a = s.viewport.screenToWorld(startPx)
+        val b = s.viewport.screenToWorld(endPx)
+        val rect = WorldRect(min(a.x, b.x), min(a.y, b.y), max(a.x, b.x), max(a.y, b.y))
+        val crossing = endPx.x < startPx.x
+        val hits = s.entities.filter { if (crossing) it.touchesRect(rect) else it.insideRect(rect) }.map { it.id }
+        if (hits.isEmpty()) post("Nothing ${if (crossing) "touches" else "inside"} that box")
+        else _state.update { it.copy(selectedIds = it.selectedIds + hits) }
+    }
+
+    fun selectConnected() {
+        val s = _state.value
+        if (s.selectedIds.isEmpty()) {
+            post("Select an element first")
+            return
+        }
+        val ids = ChainBuilder.connectedIds(s.entities, s.selectedIds)
+        _state.update { it.copy(selectedIds = ids) }
+    }
+
+    fun invertSelection() = _state.update { s ->
+        s.copy(selectedIds = s.entities.map { it.id }.toSet() - s.selectedIds)
+    }
+
+    fun selectSameKind() {
+        val s = _state.value
+        val first = s.selected.firstOrNull()
+        if (first == null) {
+            post("Select an element first")
+            return
+        }
+        val kind = first.kindLabel()
+        _state.update { st -> st.copy(selectedIds = st.entities.filter { it.kindLabel() == kind }.map { it.id }.toSet()) }
+    }
+
+    // ---- Names & properties --------------------------------------------------------------------------------
+
+    fun renameSelected(name: String) {
+        val ids = _state.value.selectedIds
+        if (ids.isEmpty()) return
+        val clean = name.trim()
+        repository.update { list -> list.map { if (it.id in ids) it.withName(clean) else it } }
+        // Keep a beam study's mark in step with its elements.
+        repository.studies.value.filter { it.entityIds.all { id -> id in ids } && clean.isNotEmpty() }
+            .forEach { repository.upsertStudy(it.copy(name = clean)) }
+    }
+
+    /** Numbers the selected elements B1, B2 … continuing after the highest existing mark with that prefix. */
+    fun autoNameSelected(prefix: String) {
+        val s = _state.value
+        val p = prefix.trim()
+        if (p.isEmpty() || s.selectedIds.isEmpty()) return
+        val existing = (s.entities.map { it.name } + s.studies.map { it.name }).toMutableList()
+        val newNames = HashMap<String, String>()
+        for (e in s.entities) {
+            if (e.id in s.selectedIds) {
+                val n = nextName(p, existing)
+                existing.add(n)
+                newNames[e.id] = n
+            }
+        }
+        repository.update { list -> list.map { e -> newNames[e.id]?.let { e.withName(it) } ?: e } }
+    }
+
+    fun setLayerSelected(layer: String) {
+        val ids = _state.value.selectedIds
+        val clean = layer.trim()
+        if (ids.isEmpty() || clean.isEmpty()) return
+        repository.update { list -> list.map { if (it.id in ids) it.withLayer(clean) else it } }
+    }
+
+    fun setThicknessSelected(cm: Int) {
+        val ids = _state.value.selectedIds
+        if (ids.isEmpty() || cm !in 5..100) return
+        repository.update { list ->
+            list.map { if (it.id in ids && it is Wall) it.copy(thicknessM = cm / 100.0) else it }
+        }
+    }
+
+    fun cycleLabelMode() = _state.update {
+        val next = when (it.labelMode) {
+            LabelMode.OFF -> LabelMode.NAMES
+            LabelMode.NAMES -> LabelMode.FULL
+            LabelMode.FULL -> LabelMode.OFF
+        }
+        it.copy(labelMode = next)
+    }
+
+    // ---- Beam study ------------------------------------------------------------------------------------------
+
+    /** Builds the request for the selected line(s): one connected run of lines = one beam (continuous if several spans). */
+    fun prepareStudy(): BeamStudyRequest? {
+        val s = _state.value
+        val chains = ChainBuilder.build(s.selected)
+        val chain = chains.firstOrNull()
+        if (chain == null) {
+            post("Select a line, wall or polyline first, then press Study")
+            return null
+        }
+        val ids = chain.entityIds
+        val existing = s.studies.firstOrNull { it.entityIds.toSet() == ids.toSet() }
+        val named = s.entities.firstOrNull { it.id in ids && it.name.isNotBlank() }?.name
+        val name = existing?.name ?: named ?: nextName("B", s.entities.map { it.name } + s.studies.map { it.name })
+        val notes = ArrayList<String>()
+        if (chains.size > 1) notes.add("${chains.size} separate beams selected — studying the first; select the others one by one.")
+        if (chain.spansM.size > 8) notes.add("More than 8 spans — only the first 8 are used.")
+        if (!chain.straight) notes.add("The selected run bends; it is analysed as a straight continuous beam.")
+        return BeamStudyRequest(
+            entityIds = ids,
+            name = name,
+            spansM = chain.spansM.take(8).map { Math.round(it * 1000.0) / 1000.0 },
+            note = notes.joinToString(" ").ifEmpty { null },
+            projectName = s.projectName
+        )
+    }
+
+    /** Selects and zooms to the elements of a saved study. */
+    fun focusStudy(studyId: String) {
+        val st = _state.value.studies.firstOrNull { it.id == studyId } ?: return
+        val members = _state.value.entities.filter { it.id in st.entityIds }
+        _state.update { it.copy(selectedIds = st.entityIds.toSet(), tool = EditorTool.SELECT, points = emptyList()) }
+        zoomToEntities(members)
+    }
+
+    fun studyRequestFor(studyId: String): BeamStudyRequest? {
+        val st = _state.value.studies.firstOrNull { it.id == studyId } ?: return null
+        _state.update { it.copy(selectedIds = st.entityIds.toSet()) }
+        return prepareStudy()
+    }
 
     // ---- Text ---------------------------------------------------------------------------------------
 
@@ -446,8 +599,10 @@ class CadEditorViewModel @Inject constructor(
 
     private fun applyProject(p: CadProject) {
         savedEntities = p.entities
+        savedStudies = p.studies
         projectCreatedAt = p.createdAt
         repository.setAll(p.entities)
+        repository.setStudies(p.studies)
         _state.update {
             it.copy(
                 projectId = p.id, projectName = p.name, selectedIds = emptySet(),
@@ -462,18 +617,24 @@ class CadEditorViewModel @Inject constructor(
         val s = _state.value
         if (s.projectId.isEmpty()) return
         val snapshot = repository.entities.value
+        val ids = snapshot.map { it.id }.toSet()
+        val studies = repository.studies.value.filter { st -> st.entityIds.all { it in ids } }
         val project = CadProject(
-            id = s.projectId, name = s.projectName, entities = snapshot,
+            id = s.projectId, name = s.projectName, entities = snapshot, studies = studies,
             createdAt = projectCreatedAt, modifiedAt = System.currentTimeMillis()
         )
         projects.save(project)
         projects.setLastOpened(project.id)
         savedEntities = snapshot
+        savedStudies = studies
+        repository.setStudies(studies)
         _state.update { it.copy(dirty = repository.entities.value != savedEntities) }
     }
 
     private suspend fun persistIfDirty() {
-        if (repository.entities.value != savedEntities) persist()
+        val ids = repository.entities.value.map { it.id }.toSet()
+        val active = repository.studies.value.filter { st -> st.entityIds.all { it in ids } }
+        if (repository.entities.value != savedEntities || active != savedStudies) persist()
     }
 
     /** Called from Activity.onStop so work is never lost. */

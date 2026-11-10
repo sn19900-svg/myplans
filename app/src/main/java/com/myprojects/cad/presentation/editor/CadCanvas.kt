@@ -44,6 +44,8 @@ import com.myprojects.cad.domain.model.LineEntity
 import com.myprojects.cad.domain.model.PolylineEntity
 import com.myprojects.cad.domain.model.TextEntity
 import com.myprojects.cad.domain.model.Wall
+import com.myprojects.cad.domain.model.labelAnchor
+import com.myprojects.cad.domain.structural.StudyRecord
 import com.myprojects.cad.domain.model.geometry
 import kotlin.math.atan2
 import kotlin.math.ceil
@@ -73,6 +75,7 @@ fun CadCanvas(
     onTransform: (Vec2, Vec2, Double) -> Unit,
     onCursorDelta: (Double, Double) -> Unit,
     onTap: (Vec2) -> Unit,
+    onBox: (Vec2, Vec2, Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -102,6 +105,8 @@ fun CadCanvas(
     val currentTransform by rememberUpdatedState(onTransform)
     val currentCursorDelta by rememberUpdatedState(onCursorDelta)
     val currentTap by rememberUpdatedState(onTap)
+    val currentBox by rememberUpdatedState(onBox)
+    val isSelect by rememberUpdatedState(state.tool == EditorTool.SELECT)
 
     Canvas(
         modifier = modifier
@@ -115,6 +120,7 @@ fun CadCanvas(
                     var multi = false
                     var moved = false
                     var total = Offset.Zero
+                    var lastPos = down.position
                     do {
                         val event = awaitPointerEvent()
                         val pressedCount = event.changes.count { it.pressed }
@@ -139,11 +145,18 @@ fun CadCanvas(
                             if (!moved && total.getDistance() > slop) moved = true
                             if (moved) {
                                 val d = if (wasMoved) delta else total
+                                lastPos = change.position
                                 if (isPan) {
                                     currentTransform(
                                         Vec2(change.position.x.toDouble(), change.position.y.toDouble()),
                                         Vec2(d.x.toDouble(), d.y.toDouble()),
                                         1.0
+                                    )
+                                } else if (isSelect) {
+                                    currentBox(
+                                        Vec2(down.position.x.toDouble(), down.position.y.toDouble()),
+                                        Vec2(change.position.x.toDouble(), change.position.y.toDouble()),
+                                        false
                                     )
                                 } else {
                                     currentCursorDelta(d.x.toDouble(), d.y.toDouble())
@@ -154,6 +167,12 @@ fun CadCanvas(
                     } while (event.changes.any { it.pressed })
                     if (!multi && !moved) {
                         currentTap(Vec2(down.position.x.toDouble(), down.position.y.toDouble()))
+                    } else if (!multi && moved && isSelect) {
+                        currentBox(
+                            Vec2(down.position.x.toDouble(), down.position.y.toDouble()),
+                            Vec2(lastPos.x.toDouble(), lastPos.y.toDouble()),
+                            true
+                        )
                     }
                 }
             }
@@ -172,7 +191,9 @@ fun CadCanvas(
         }
         for (e in state.preview) drawEntity(vp, e, palette, DrawMode.PREVIEW, labelPaint)
 
+        drawLabels(state, vp, labelPaint, Color(0xFF2E7D32), Color(0xFFC62828), scheme.tertiary, background)
         for (p in state.points) drawPendingMarker(vp, p, accent)
+        state.selectBox?.let { drawSelectBox(it, accent, Color(0xFF2E7D32)) }
         state.cursor?.let { drawCrosshair(vp, it, accent) }
     }
 }
@@ -379,4 +400,79 @@ private fun DrawScope.drawCrosshair(vp: Viewport, snap: SnapResult, color: Color
         SnapType.GRID -> drawRect(color, topLeft = Offset(c.x - 3.dp.toPx(), c.y - 3.dp.toPx()), size = Size(6.dp.toPx(), 6.dp.toPx()), style = stroke)
         SnapType.NONE -> Unit
     }
+}
+
+
+// ---- Labels (element marks and beam-study results) ------------------------------------------------------
+
+private fun DrawScope.drawHaloText(
+    text: String, x: Float, y: Float, paint: android.graphics.Paint, color: Color, halo: Color
+) {
+    drawIntoCanvas { c ->
+        paint.style = android.graphics.Paint.Style.STROKE
+        paint.strokeWidth = 3.dp.toPx()
+        paint.color = halo.copy(alpha = 0.85f).toArgb()
+        c.nativeCanvas.drawText(text, x, y, paint)
+        paint.style = android.graphics.Paint.Style.FILL
+        paint.color = color.toArgb()
+        c.nativeCanvas.drawText(text, x, y, paint)
+    }
+}
+
+private fun DrawScope.drawLabels(
+    state: EditorUiState, vp: Viewport, paint: android.graphics.Paint,
+    okColor: Color, badColor: Color, nameColor: Color, halo: Color
+) {
+    if (state.labelMode == LabelMode.OFF) return
+    val byFirst = HashMap<String, StudyRecord>()
+    val skip = HashSet<String>()
+    for (st in state.studies) {
+        st.entityIds.firstOrNull()?.let { byFirst[it] = st }
+        // One mark per beam: the other spans of the same beam stay unlabeled.
+        st.entityIds.drop(1).forEach { id ->
+            val e = state.entities.firstOrNull { it.id == id }
+            if (e != null && e.name == st.name) skip.add(id)
+        }
+    }
+    paint.textAlign = android.graphics.Paint.Align.CENTER
+    for (e in state.entities) {
+        if (e.name.isBlank() || e is TextEntity || e.id in skip) continue
+        val pos = vp.worldToScreen(e.labelAnchor()).toOffset()
+        if (pos.x < -120f || pos.y < -120f || pos.x > size.width + 120f || pos.y > size.height + 120f) continue
+        val study = byFirst[e.id]
+        val sum = study?.summary
+        val color = when {
+            sum == null -> nameColor
+            sum.ok -> okColor
+            else -> badColor
+        }
+        paint.isFakeBoldText = true
+        paint.textSize = 12.sp.toPx()
+        drawHaloText(e.name, pos.x, pos.y + 20.dp.toPx(), paint, color, halo)
+        if (state.labelMode == LabelMode.FULL && sum != null) {
+            paint.isFakeBoldText = false
+            paint.textSize = 10.sp.toPx()
+            drawHaloText("${sum.section} cm", pos.x, pos.y + 33.dp.toPx(), paint, color, halo)
+            drawHaloText("▼ ${sum.bottom}   ▲ ${sum.top}", pos.x, pos.y + 45.dp.toPx(), paint, color, halo)
+            drawHaloText(sum.stirrups, pos.x, pos.y + 57.dp.toPx(), paint, color, halo)
+        }
+    }
+    paint.isFakeBoldText = true
+}
+
+private fun DrawScope.drawSelectBox(box: SelectBox, windowColor: Color, crossingColor: Color) {
+    val color = if (box.crossing) crossingColor else windowColor
+    val tl = Offset(minOf(box.startPx.x, box.endPx.x).toFloat(), minOf(box.startPx.y, box.endPx.y).toFloat())
+    val sz = Size(
+        kotlin.math.abs(box.endPx.x - box.startPx.x).toFloat(),
+        kotlin.math.abs(box.endPx.y - box.startPx.y).toFloat()
+    )
+    drawRect(color.copy(alpha = 0.12f), topLeft = tl, size = sz)
+    drawRect(
+        color, topLeft = tl, size = sz,
+        style = Stroke(
+            width = 1.5.dp.toPx(),
+            pathEffect = if (box.crossing) PathEffect.dashPathEffect(floatArrayOf(10f, 8f)) else null
+        )
+    )
 }

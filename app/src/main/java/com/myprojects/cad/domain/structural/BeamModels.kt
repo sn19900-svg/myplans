@@ -1,9 +1,19 @@
 package com.myprojects.cad.domain.structural
 
+import com.myprojects.cad.domain.model.newId
+
 /** Units everywhere in this package: m, mm, MPa, kN, kN·m. */
+enum class EndCondition(val label: String) {
+    PINNED("Pinned"),
+    FIXED("Fixed"),
+    FREE("Overhang (free end)")
+}
+
 enum class BeamType(val label: String) {
     SIMPLY_SUPPORTED("Simply supported"),
     CANTILEVER("Cantilever"),
+    FIXED_FIXED("Fixed–fixed"),
+    PROPPED("Propped cantilever"),
     CONTINUOUS("Continuous")
 }
 
@@ -33,8 +43,36 @@ data class BeamInput(
     val supportWidthMm: Double = 250.0,
     val includeSelfWeight: Boolean = true,
     val deadFactor: Double = 1.2,
-    val liveFactor: Double = 1.6
+    val liveFactor: Double = 1.6,
+    /** Only used by [BeamType.CONTINUOUS]; the other types imply their end conditions. */
+    val leftEnd: EndCondition = EndCondition.PINNED,
+    val rightEnd: EndCondition = EndCondition.PINNED
 ) {
+    val leftCondition: EndCondition
+        get() = when (type) {
+            BeamType.SIMPLY_SUPPORTED -> EndCondition.PINNED
+            BeamType.CANTILEVER, BeamType.FIXED_FIXED, BeamType.PROPPED -> EndCondition.FIXED
+            BeamType.CONTINUOUS -> leftEnd
+        }
+
+    val rightCondition: EndCondition
+        get() = when (type) {
+            BeamType.SIMPLY_SUPPORTED, BeamType.PROPPED -> EndCondition.PINNED
+            BeamType.CANTILEVER -> EndCondition.FREE
+            BeamType.FIXED_FIXED -> EndCondition.FIXED
+            BeamType.CONTINUOUS -> rightEnd
+        }
+
+    /** Number of vertical supports (every span boundary except free ends). */
+    val supportCount: Int
+        get() {
+            val n = spansM.size
+            var c = n + 1
+            if (leftCondition == EndCondition.FREE) c--
+            if (rightCondition == EndCondition.FREE) c--
+            return c
+        }
+
     /** Reinforced-concrete unit weight 25 kN/m³. */
     val selfWeightKnPerM: Double
         get() = if (includeSelfWeight) 25.0 * (bMm / 1000.0) * (hMm / 1000.0) else 0.0
@@ -44,6 +82,9 @@ data class BeamInput(
         val n = spansM.size
         if (n == 0) return "Add at least one span"
         if (type != BeamType.CONTINUOUS && n != 1) return "${type.label} beams have exactly one span"
+        val hasFixedEnd = leftCondition == EndCondition.FIXED || rightCondition == EndCondition.FIXED
+        if (supportCount < 2 && !hasFixedEnd) return "This end-condition combination is unstable — add a support or fix an end"
+        if (supportCount < 1) return "The beam has no support"
         if (type == BeamType.CONTINUOUS && n < 2) return "A continuous beam needs at least two spans"
         if (n > 8) return "Up to 8 spans are supported"
         if (deadKnPerM.size != n || liveKnPerM.size != n) return "Loads must match the number of spans"
@@ -97,7 +138,9 @@ data class FlexureDesign(
     val layers: Int,
     val phiMnKnM: Double,
     val ok: Boolean,
-    val note: String?
+    val note: String?,
+    /** true = top (negative-moment) steel, false = bottom steel. */
+    val top: Boolean = false
 ) {
     val barsText: String get() = if (bars > 0) "${bars}Φ$barDiaMm" else "—"
 }
@@ -139,4 +182,51 @@ data class BeamDesign(
     val warnings: List<String>
 ) {
     val allOk: Boolean get() = flexure.all { it.ok } && shear.all { it.ok } && warnings.isEmpty()
+}
+
+
+// ---- Study records (stored with the project) ----------------------------------------------------------
+
+data class StudySummary(
+    val section: String,
+    val bottom: String,
+    val top: String,
+    val stirrups: String,
+    val ok: Boolean,
+    val maxMomentKnM: Double,
+    val maxShearKn: Double
+)
+
+/** The saved study of one beam. [entityIds] are the drawing elements (in order) that make up the beam. */
+data class StudyRecord(
+    val id: String = newId(),
+    val entityIds: List<String>,
+    val name: String,
+    val input: BeamInput,
+    val summary: StudySummary? = null,
+    val modifiedAt: Long = System.currentTimeMillis()
+)
+
+/** What the drawing hands to the beam-study screen when the user presses Study. */
+data class BeamStudyRequest(
+    val entityIds: List<String>,
+    val name: String,
+    val spansM: List<Double>,
+    val note: String? = null,
+    val projectName: String = ""
+)
+
+fun BeamDesign.toSummary(input: BeamInput, maxMomentKnM: Double, maxShearKn: Double): StudySummary {
+    fun pick(top: Boolean): String =
+        flexure.filter { it.top == top }.maxByOrNull { it.asProvMm2 }?.barsText ?: "—"
+    val s1 = shear.minOfOrNull { it.s1Mm }?.toInt()
+    val s2 = shear.minOfOrNull { it.s2Mm }?.toInt()
+    val dia = input.stirrupDiaMm.toInt()
+    val stirrups = when {
+        s1 == null || s2 == null -> "—"
+        s1 >= s2 -> "Φ$dia@$s2"
+        else -> "Φ$dia@$s1/$s2"
+    }
+    val section = "${(input.bMm / 10.0).toInt()}×${(input.hMm / 10.0).toInt()}"
+    return StudySummary(section, pick(false), pick(true), stirrups, allOk, maxMomentKnM, maxShearKn)
 }

@@ -1,6 +1,8 @@
 package com.myprojects.cad.presentation.beam
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -21,11 +23,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,7 +41,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.myprojects.cad.domain.structural.BeamAnalysis
 import com.myprojects.cad.domain.structural.BeamDesign
+import com.myprojects.cad.domain.structural.BeamStudyRequest
 import com.myprojects.cad.domain.structural.BeamType
+import com.myprojects.cad.domain.structural.EndCondition
 import java.util.Locale
 import kotlin.math.max
 
@@ -47,21 +54,39 @@ private fun f2(v: Double) = String.format(Locale.US, "%.2f", v)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BeamStudyScreen(
+    request: BeamStudyRequest,
     onBack: () -> Unit,
-    initialSpans: List<Double>,
     vm: BeamStudyViewModel = hiltViewModel()
 ) {
     val ui by vm.state.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
     BackHandler(onBack = onBack)
-    LaunchedEffect(initialSpans) { vm.prefill(initialSpans) }
+    // Opening from the drawing analyses immediately; a saved study of the same elements is restored.
+    LaunchedEffect(request) { vm.open(request) }
+    LaunchedEffect(ui.message) {
+        ui.message?.let {
+            snackbar.showSnackbar(it)
+            vm.consumeMessage()
+        }
+    }
+    val reportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri -> if (uri != null) vm.exportReport(uri) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Beam study") },
-                navigationIcon = { TextButton(onClick = onBack) { Text("←") } }
+                title = { Text("Beam ${ui.form.name}") },
+                navigationIcon = { TextButton(onClick = onBack) { Text("←") } },
+                actions = {
+                    TextButton(
+                        onClick = { reportLauncher.launch("${ui.form.name.ifBlank { "beam" }}-calc.pdf") },
+                        enabled = ui.design != null
+                    ) { Text("PDF") }
+                }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbar) }
     ) { padding ->
         Column(
             Modifier
@@ -71,6 +96,7 @@ fun BeamStudyScreen(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            ui.note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary) }
             FormSection(ui.form, vm)
             Button(onClick = vm::calculate, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) {
                 Text(if (ui.busy) "Calculating…" else "Analyze & design")
@@ -109,10 +135,28 @@ private fun NumField(label: String, value: String, onChange: (String) -> Unit, m
 
 @Composable
 private fun FormSection(f: BeamForm, vm: BeamStudyViewModel) {
-    SectionCard("Beam type") {
+    SectionCard("Beam mark and type") {
+        OutlinedTextField(
+            value = f.name, onValueChange = { v -> vm.update { it.copy(name = v) } },
+            singleLine = true, label = { Text("Mark (e.g. B1)") }, modifier = Modifier.fillMaxWidth()
+        )
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             BeamType.values().forEach { t ->
                 FilterChip(selected = f.type == t, onClick = { vm.setType(t) }, label = { Text(t.label) })
+            }
+        }
+        if (f.type == BeamType.CONTINUOUS) {
+            Text("Left end", style = MaterialTheme.typography.labelMedium)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                EndCondition.values().forEach { c ->
+                    FilterChip(selected = f.leftEnd == c, onClick = { vm.setLeftEnd(c) }, label = { Text(c.label) })
+                }
+            }
+            Text("Right end", style = MaterialTheme.typography.labelMedium)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                EndCondition.values().forEach { c ->
+                    FilterChip(selected = f.rightEnd == c, onClick = { vm.setRightEnd(c) }, label = { Text(c.label) })
+                }
             }
         }
     }

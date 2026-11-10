@@ -69,7 +69,7 @@ object BeamSolver {
         val spanStart: DoubleArray,
         val reactionX: DoubleArray,
         val reactionV: DoubleArray,
-        val fixedMoment: Double,
+        val fixedMoments: List<Pair<Double, Double>>,
         val nodeDisp: DoubleArray
     ) {
         fun v(x: Double, right: Boolean): Double {
@@ -89,9 +89,12 @@ object BeamSolver {
             return s
         }
 
-        fun m(x: Double): Double {
+        /** Sagging moment at x. [right] selects the section just right (true) or just left (false) of x. */
+        fun m(x: Double, right: Boolean = true): Double {
             var s = 0.0
-            if (fixedMoment != 0.0 && x >= -EPS) s -= fixedMoment
+            for ((fx, fm) in fixedMoments) {
+                if (if (right) fx <= x + EPS else fx < x - EPS) s -= fm
+            }
             for (i in reactionX.indices) if (reactionX[i] <= x + EPS) s += reactionV[i] * (x - reactionX[i])
             for (p in loads.pts) if (p.x <= x + EPS) s -= p.p * (x - p.x)
             for (j in loads.w.indices) {
@@ -109,8 +112,11 @@ object BeamSolver {
         val spanStart = DoubleArray(n + 1)
         for (i in 0 until n) spanStart[i + 1] = spanStart[i] + input.spansM[i]
         val total = spanStart[n]
-        val cantilever = input.type == BeamType.CANTILEVER
-        val supportsX: List<Double> = if (cantilever) listOf(0.0) else spanStart.toList()
+        val leftCond = input.leftCondition
+        val rightCond = input.rightCondition
+        val supportsX: List<Double> = spanStart.toList().filterIndexed { i, _ ->
+            !(i == 0 && leftCond == EndCondition.FREE) && !(i == n && rightCond == EndCondition.FREE)
+        }
 
         val bM = input.bMm / 1000.0
         val hM = input.hMm / 1000.0
@@ -164,7 +170,10 @@ object BeamSolver {
         val supportNodes = supportsX.map { nodeIndex(it) }
         val constrained = ArrayList<Int>()
         for (s in supportNodes) constrained.add(2 * s)
-        if (cantilever) constrained.add(1) // rotation at node 0
+        val fixedNodes = ArrayList<Int>()
+        if (leftCond == EndCondition.FIXED) fixedNodes.add(nodeIndex(0.0))
+        if (rightCond == EndCondition.FIXED) fixedNodes.add(nodeIndex(total))
+        for (fnode in fixedNodes) constrained.add(2 * fnode + 1) // rotation restrained
         val constrainedSet = constrained.toSet()
         val free = (0 until nd).filter { it !in constrainedSet }
 
@@ -200,7 +209,7 @@ object BeamSolver {
                 return s - f[dof]
             }
             val rv = DoubleArray(supportsX.size) { reaction(2 * supportNodes[it]) }
-            val fixedM = if (cantilever) reaction(1) else 0.0
+            val fixedM = fixedNodes.map { xsNode[it] to reaction(2 * it + 1) }
             val disp = DoubleArray(nNodes) { -u[2 * it] * 1000.0 } // downward mm
             return Statics(ls, spanStart, supportsX.toDoubleArray(), rv, fixedM, disp)
         }
@@ -242,11 +251,11 @@ object BeamSolver {
             vMax[i] = max(gD * vd + gL * vp, 1.4 * vd)
             vMin[i] = min(gD * vd + gL * vn, 1.4 * vd)
 
-            val md = dead.m(x)
+            val md = dead.m(x, right)
             var mp = 0.0
             var mn = 0.0
             for (c in lives) {
-                val mm = c.m(x)
+                val mm = c.m(x, right)
                 if (mm > 0) mp += mm else mn += mm
             }
             mMax[i] = max(gD * md + gL * mp, 1.4 * md)
@@ -302,7 +311,10 @@ object BeamSolver {
             supportNegativeKnM = supNeg,
             deflXs = xsNode, deflDeadMm = deflDead, deflLiveMm = deflLive,
             ecMpa = ecMpa, eiKnM2 = ei,
-            serviceMoment = { x -> dead.m(x) + lives.sumOf { it.m(x) } }
+            serviceMoment = { x ->
+                val r = x < total - 1e-9
+                dead.m(x, r) + lives.sumOf { it.m(x, r) }
+            }
         )
     }
 

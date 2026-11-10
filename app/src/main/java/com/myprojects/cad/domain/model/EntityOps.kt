@@ -5,6 +5,7 @@ import com.myprojects.cad.core.engine.SnapTargets
 import com.myprojects.cad.core.engine.WorldRect
 import com.myprojects.cad.core.geometry.Geo
 import com.myprojects.cad.core.geometry.Vec2
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
@@ -82,7 +83,7 @@ fun CadEntity.transformed(x: Xform, keepId: Boolean = true): CadEntity {
             offset = if (x.mirrored) -offset else offset
         )
     }
-    return if (keepId) moved else moved.withId(newId())
+    return if (keepId) moved else moved.withId(newId()).withName("")
 }
 
 // ---- Construction helpers ------------------------------------------------------------------------
@@ -263,19 +264,19 @@ fun CadEntity.offsetBy(distance: Double, side: Vec2): CadEntity? {
     return when (this) {
         is LineEntity -> {
             val n = sideNormal(start, end, side) ?: return null
-            copy(id = newId(), start = start + n * distance, end = end + n * distance)
+            copy(id = newId(), start = start + n * distance, end = end + n * distance, name = "")
         }
         is Wall -> {
             val n = sideNormal(start, end, side) ?: return null
-            copy(id = newId(), start = start + n * distance, end = end + n * distance)
+            copy(id = newId(), start = start + n * distance, end = end + n * distance, name = "")
         }
         is CircleEntity -> {
             val r = if (side.distanceTo(center) > radius) radius + distance else radius - distance
-            if (r <= 1e-9) null else copy(id = newId(), radius = r)
+            if (r <= 1e-9) null else copy(id = newId(), radius = r, name = "")
         }
         is ArcEntity -> {
             val r = if (side.distanceTo(center) > radius) radius + distance else radius - distance
-            if (r <= 1e-9) null else copy(id = newId(), radius = r)
+            if (r <= 1e-9) null else copy(id = newId(), radius = r, name = "")
         }
         is PolylineEntity -> offsetPolyline(this, distance, side)
         is TextEntity, is DimensionEntity -> null
@@ -308,8 +309,111 @@ private fun offsetPolyline(pl: PolylineEntity, d: Double, side: Vec2): PolylineE
         }
         out.add(shifted.last().b)
     }
-    return pl.copy(id = newId(), points = out)
+    return pl.copy(id = newId(), points = out, name = "")
 }
 
 @Suppress("unused")
 private fun angleOf(from: Vec2, to: Vec2): Double = atan2(to.y - from.y, to.x - from.x)
+
+
+// ---- Names, kinds, selection helpers -----------------------------------------------------------------
+
+fun CadEntity.withName(newName: String): CadEntity = when (this) {
+    is Wall -> copy(name = newName)
+    is LineEntity -> copy(name = newName)
+    is PolylineEntity -> copy(name = newName)
+    is CircleEntity -> copy(name = newName)
+    is ArcEntity -> copy(name = newName)
+    is TextEntity -> copy(name = newName)
+    is DimensionEntity -> copy(name = newName)
+}
+
+fun CadEntity.withLayer(newLayer: String): CadEntity = when (this) {
+    is Wall -> copy(layer = newLayer)
+    is LineEntity -> copy(layer = newLayer)
+    is PolylineEntity -> copy(layer = newLayer)
+    is CircleEntity -> copy(layer = newLayer)
+    is ArcEntity -> copy(layer = newLayer)
+    is TextEntity -> copy(layer = newLayer)
+    is DimensionEntity -> copy(layer = newLayer)
+}
+
+fun CadEntity.kindLabel(): String = when (this) {
+    is Wall -> "Wall"
+    is LineEntity -> "Line"
+    is PolylineEntity -> if (closed) "Closed polyline" else "Polyline"
+    is CircleEntity -> "Circle"
+    is ArcEntity -> "Arc"
+    is TextEntity -> "Text"
+    is DimensionEntity -> "Dimension"
+}
+
+/** Length (or perimeter / arc length) in meters, or null for text. */
+fun CadEntity.lengthM(): Double? = when (this) {
+    is Wall -> length
+    is LineEntity -> start.distanceTo(end)
+    is PolylineEntity -> segments().sumOf { it.a.distanceTo(it.b) }
+    is CircleEntity -> 2.0 * PI * radius
+    is ArcEntity -> radius * Math.toRadians(sweepDeg)
+    is DimensionEntity -> p1.distanceTo(p2)
+    is TextEntity -> null
+}
+
+/** Where the name label sits (middle of the element). */
+fun CadEntity.labelAnchor(): Vec2 = when (this) {
+    is Wall -> midpoint
+    is LineEntity -> start.midpoint(end)
+    is PolylineEntity -> {
+        val segs = segments()
+        if (segs.isEmpty()) points.firstOrNull() ?: Vec2.ZERO
+        else segs[segs.size / 2].let { it.a.midpoint(it.b) }
+    }
+    is CircleEntity -> center
+    is ArcEntity -> midPoint
+    is TextEntity -> position
+    is DimensionEntity -> geometry().let { it.d1.midpoint(it.d2) }
+}
+
+/** Next free mark for a prefix: names B1, B3 exist -> "B4". */
+fun nextName(prefix: String, existing: Collection<String>): String {
+    var max = 0
+    for (n in existing) {
+        if (n.startsWith(prefix)) {
+            val k = n.substring(prefix.length).toIntOrNull()
+            if (k != null && k > max) max = k
+        }
+    }
+    return prefix + (max + 1)
+}
+
+fun CadEntity.insideRect(r: WorldRect): Boolean =
+    extentPoints().all { it.x >= r.minX && it.x <= r.maxX && it.y >= r.minY && it.y <= r.maxY }
+
+/** AutoCAD "crossing" test: any part of the element touches the rectangle. */
+fun CadEntity.touchesRect(r: WorldRect): Boolean {
+    val segs: List<Segment> = when (this) {
+        is Wall -> listOf(Segment(start, end))
+        is LineEntity -> listOf(Segment(start, end))
+        is PolylineEntity -> segments()
+        else -> emptyList()
+    }
+    fun inside(p: Vec2) = p.x >= r.minX && p.x <= r.maxX && p.y >= r.minY && p.y <= r.maxY
+    if (segs.isEmpty()) {
+        val pts = extentPoints()
+        val minX = pts.minOf { it.x }
+        val maxX = pts.maxOf { it.x }
+        val minY = pts.minOf { it.y }
+        val maxY = pts.maxOf { it.y }
+        return !(maxX < r.minX || minX > r.maxX || maxY < r.minY || minY > r.maxY)
+    }
+    val c1 = Vec2(r.minX, r.minY)
+    val c2 = Vec2(r.maxX, r.minY)
+    val c3 = Vec2(r.maxX, r.maxY)
+    val c4 = Vec2(r.minX, r.maxY)
+    val edges = listOf(Segment(c1, c2), Segment(c2, c3), Segment(c3, c4), Segment(c4, c1))
+    for (s in segs) {
+        if (inside(s.a) || inside(s.b)) return true
+        for (e in edges) if (Geo.segmentIntersection(s.a, s.b, e.a, e.b) != null) return true
+    }
+    return false
+}

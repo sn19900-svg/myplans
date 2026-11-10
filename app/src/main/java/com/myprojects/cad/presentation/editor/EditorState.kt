@@ -20,8 +20,16 @@ import com.myprojects.cad.domain.model.dimensionOffset
 import com.myprojects.cad.domain.model.offsetBy
 import com.myprojects.cad.domain.model.rectPolyline
 import com.myprojects.cad.domain.model.transformed
+import com.myprojects.cad.domain.structural.StudyRecord
 
 enum class ToolCategory { VIEW, DRAW, MODIFY }
+
+enum class LabelMode(val label: String) { OFF("Off"), NAMES("Names"), FULL("Full") }
+
+/** Rubber-band selection rectangle in screen pixels. Dragging right-to-left = crossing, left-to-right = window. */
+data class SelectBox(val startPx: Vec2, val endPx: Vec2) {
+    val crossing: Boolean get() = endPx.x < startPx.x
+}
 
 enum class EditorTool(val label: String, val category: ToolCategory, val needsSelection: Boolean = false) {
     PAN("Pan", ToolCategory.VIEW),
@@ -63,7 +71,10 @@ data class EditorUiState(
     val projectName: String = "",
     val dirty: Boolean = false,
     val projects: List<ProjectInfo> = emptyList(),
-    val busy: Boolean = false
+    val busy: Boolean = false,
+    val studies: List<StudyRecord> = emptyList(),
+    val labelMode: LabelMode = LabelMode.FULL,
+    val selectBox: SelectBox? = null
 ) {
     val selected: List<CadEntity> get() = entities.filter { it.id in selectedIds }
 
@@ -162,7 +173,7 @@ data class EditorUiState(
                 1 -> "Pick second point"
                 else -> "Pick dimension line position"
             }
-            EditorTool.SELECT -> "Tap objects to select (${selectedIds.size} selected)"
+            EditorTool.SELECT -> "Tap to select · drag a box (→ window, ← crossing) · ${selectedIds.size} selected"
             EditorTool.MOVE -> if (points.isEmpty()) "Pick base point" else "Pick destination · or Length/Angle then ✓"
             EditorTool.COPY -> if (points.isEmpty()) "Pick base point" else "Pick destination (repeats) · Done to end"
             EditorTool.ROTATE -> if (points.isEmpty()) "Pick base point" else "Pick angle point · or type Angle then ✓"

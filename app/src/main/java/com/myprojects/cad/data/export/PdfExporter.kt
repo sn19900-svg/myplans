@@ -16,6 +16,7 @@ import com.myprojects.cad.domain.model.PolylineEntity
 import com.myprojects.cad.domain.model.TextEntity
 import com.myprojects.cad.domain.model.Wall
 import com.myprojects.cad.domain.model.geometry
+import com.myprojects.cad.domain.model.labelAnchor
 import com.myprojects.cad.domain.model.worldBounds
 import java.io.OutputStream
 import java.text.SimpleDateFormat
@@ -119,6 +120,12 @@ class PdfExporter @Inject constructor() {
                         c.restore()
                     }
                     is DimensionEntity -> drawDimension(c, e, ::px, ::py, dimPaint, textPaint)
+                }
+                if (e.name.isNotBlank() && e !is TextEntity) {
+                    // Element marks (B1, W3 …) printed under the element.
+                    val at = e.labelAnchor()
+                    val markPaint = Paint(textPaint).apply { textSize = 2.6f; isFakeBoldText = true; textAlign = Paint.Align.CENTER }
+                    c.drawText(e.name, px(at), py(at) + 4.5f, markPaint)
                 }
             }
             c.restore()

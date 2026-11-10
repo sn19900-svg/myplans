@@ -26,14 +26,13 @@ object BeamDesigner {
 
         // ---- Flexure ----
         val flex = ArrayList<FlexureDesign>()
-        if (inp.type != BeamType.CANTILEVER) {
-            for (j in 0 until n) {
-                flex.add(designSection("Span ${j + 1} (bottom)", a.spanPositiveAtX[j], a.spanPositiveKnM[j], inp))
-            }
+        for (j in 0 until n) {
+            if (isOverhang(inp, j)) continue // overhangs only have top steel at their support
+            flex.add(designSection("${spanLabel(inp, j)} (bottom)", a.spanPositiveAtX[j], a.spanPositiveKnM[j], inp, top = false))
         }
         if (inp.type != BeamType.SIMPLY_SUPPORTED) {
             for (i in a.supportsX.indices) {
-                flex.add(designSection("Support ${'A' + i} (top)", a.supportsX[i], a.supportNegativeKnM[i], inp))
+                flex.add(designSection("Support ${'A' + i} (top)", a.supportsX[i], a.supportNegativeKnM[i], inp, top = true))
             }
         }
         for (f in flex) if (!f.ok) warnings.add("${f.label}: ${f.note ?: "check section"}")
@@ -70,7 +69,7 @@ object BeamDesigner {
             }
             rows.add(
                 DeflectionRow(
-                    label = if (inp.type == BeamType.CANTILEVER) "Cantilever" else "Span ${j + 1}",
+                    label = spanLabel(inp, j),
                     spanM = len, liveMm = live, afterAttachmentMm = after,
                     liveLimitMm = l / 360.0, limit480Mm = l / 480.0, limit240Mm = l / 240.0,
                     status = status, ok = okLive && after <= l / 240.0
@@ -83,19 +82,38 @@ object BeamDesigner {
         val fyFactor = 0.4 + inp.fyMpa / 700.0
         val hMin = (0 until n).map { j ->
             val l = inp.spansM[j] * 1000.0
-            val div = when (inp.type) {
-                BeamType.SIMPLY_SUPPORTED -> 16.0
-                BeamType.CANTILEVER -> 8.0
-                BeamType.CONTINUOUS -> when {
-                    j == 0 || j == n - 1 -> 18.5
-                    else -> 21.0
+            val div = if (isOverhang(inp, j)) {
+                8.0
+            } else {
+                val leftCont = j > 0 || inp.leftCondition == EndCondition.FIXED
+                val rightCont = j < n - 1 || inp.rightCondition == EndCondition.FIXED
+                when {
+                    leftCont && rightCont -> 21.0
+                    leftCont || rightCont -> 18.5
+                    else -> 16.0
                 }
             }
             val hm = l / div * fyFactor
-            HMinRow(if (inp.type == BeamType.CANTILEVER) "Cantilever" else "Span ${j + 1}", inp.spansM[j], hm, inp.hMm >= hm)
+            HMinRow(spanLabel(inp, j), inp.spansM[j], hm, inp.hMm >= hm)
         }
 
         return BeamDesign(flex, shear, rows, hMin, scale, scaleNote, warnings)
+    }
+
+    internal fun isOverhang(inp: BeamInput, j: Int): Boolean {
+        val n = inp.spansM.size
+        return (j == 0 && inp.leftCondition == EndCondition.FREE) ||
+            (j == n - 1 && inp.rightCondition == EndCondition.FREE)
+    }
+
+    internal fun spanLabel(inp: BeamInput, j: Int): String {
+        val n = inp.spansM.size
+        return when {
+            inp.type == BeamType.CANTILEVER -> "Cantilever"
+            j == 0 && inp.leftCondition == EndCondition.FREE -> "Overhang (left)"
+            j == n - 1 && inp.rightCondition == EndCondition.FREE -> "Overhang (right)"
+            else -> "Span ${j + 1}"
+        }
     }
 
     // ---- Flexure helpers --------------------------------------------------------------------------
@@ -119,7 +137,7 @@ object BeamDesigner {
         return asReq
     }
 
-    private fun designSection(label: String, x: Double, muKnM: Double, inp: BeamInput): FlexureDesign {
+    private fun designSection(label: String, x: Double, muKnM: Double, inp: BeamInput, top: Boolean): FlexureDesign {
         val b = inp.bMm
         val h = inp.hMm
         val fc = inp.fcMpa
@@ -168,14 +186,14 @@ object BeamDesigner {
         } else if (asReq.isFinite() && asReq < asMin) {
             note = "Minimum steel governs"
         }
-        return FlexureDesign(label, x, muKnM, d, asReq, asMin, asProv, bars, dia.toInt(), layers, phiMn, ok, note)
+        return FlexureDesign(label, x, muKnM, d, asReq, asMin, asProv, bars, dia.toInt(), layers, phiMn, ok, note, top)
     }
 
     // ---- Shear -------------------------------------------------------------------------------------
 
     private fun designShear(a: BeamAnalysis, j: Int, warnings: MutableList<String>): ShearDesign {
         val inp = a.input
-        val label = if (inp.type == BeamType.CANTILEVER) "Cantilever" else "Span ${j + 1}"
+        val label = spanLabel(inp, j)
         val b = inp.bMm
         val fc = inp.fcMpa
         val fyt = inp.fytMpa
@@ -188,9 +206,11 @@ object BeamDesigner {
         val dM = d / 1000.0
 
         // Critical section: d from the support face (supports are assumed to compress the beam end).
-        val leftOffset = if (inp.type == BeamType.CANTILEVER) 0.0 else half
-        val xl = min(lo + leftOffset + dM, mid)
-        val xr = if (inp.type == BeamType.CANTILEVER) hi else max(hi - half - dM, mid)
+        val n = inp.spansM.size
+        val leftIsSupport = !(j == 0 && inp.leftCondition == EndCondition.FREE)
+        val rightIsSupport = !(j == n - 1 && inp.rightCondition == EndCondition.FREE)
+        val xl = if (leftIsSupport) min(lo + half + dM, mid) else lo
+        val xr = if (rightIsSupport) max(hi - half - dM, mid) else hi
         val vu = max(a.shearEnvelopeAbsAt(xl), a.shearEnvelopeAbsAt(xr))
 
         val vc = 0.17 * sqrt(fc) * b * d / 1000.0

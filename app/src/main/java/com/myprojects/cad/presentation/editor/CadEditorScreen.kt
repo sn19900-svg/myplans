@@ -56,7 +56,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.myprojects.cad.core.geometry.Units
 import com.myprojects.cad.data.dxf.DxfUnit
 import com.myprojects.cad.data.export.PaperSize
+import com.myprojects.cad.domain.model.CadEntity
 import com.myprojects.cad.domain.model.ProjectInfo
+import com.myprojects.cad.domain.model.Wall
+import com.myprojects.cad.domain.model.kindLabel
+import com.myprojects.cad.domain.model.lengthM
+import com.myprojects.cad.domain.structural.BeamStudyRequest
+import com.myprojects.cad.domain.structural.StudyRecord
 import com.myprojects.cad.domain.model.WallThickness
 import com.myprojects.cad.presentation.beam.BeamStudyScreen
 import com.myprojects.cad.core.engine.SnapType
@@ -67,7 +73,7 @@ import java.util.Locale
 private val HorizontalRulerHeight = 24.dp
 private val VerticalRulerWidth = 32.dp
 
-private enum class Dialog { NONE, NEW, RENAME, OPEN, EXPORT_DXF, IMPORT_DXF, EXPORT_PDF, CONFIRM_CLEAR }
+private enum class Dialog { NONE, NEW, RENAME, OPEN, EXPORT_DXF, IMPORT_DXF, EXPORT_PDF, CONFIRM_CLEAR, PROPERTIES, SCHEDULE }
 private enum class PanelTab { DRAW, MODIFY, SNAP }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -80,8 +86,7 @@ fun CadEditorScreen(viewModel: CadEditorViewModel = hiltViewModel()) {
     var exportUnit by remember { mutableStateOf(DxfUnit.METERS) }
     var importUnit by remember { mutableStateOf<Double?>(null) }
     var paper by remember { mutableStateOf(PaperSize.A3) }
-    var showBeam by remember { mutableStateOf(false) }
-    var beamSpans by remember { mutableStateOf(emptyList<Double>()) }
+    var beamRequest by remember { mutableStateOf<BeamStudyRequest?>(null) }
 
     val dxfExport = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream")
@@ -100,8 +105,9 @@ fun CadEditorScreen(viewModel: CadEditorViewModel = hiltViewModel()) {
         }
     }
 
-    if (showBeam) {
-        BeamStudyScreen(onBack = { showBeam = false }, initialSpans = beamSpans)
+    val activeRequest = beamRequest
+    if (activeRequest != null) {
+        BeamStudyScreen(request = activeRequest, onBack = { beamRequest = null })
         return
     }
 
@@ -131,7 +137,8 @@ fun CadEditorScreen(viewModel: CadEditorViewModel = hiltViewModel()) {
                             MenuEntry("Rename…", { menuOpen = false }) { dialog = Dialog.RENAME }
                             MenuEntry("Import DXF…", { menuOpen = false }) { dialog = Dialog.IMPORT_DXF }
                             MenuEntry("Export DXF…", { menuOpen = false }) { dialog = Dialog.EXPORT_DXF }
-                            MenuEntry("Beam study…", { menuOpen = false }) { beamSpans = viewModel.selectedSpanLengths(); showBeam = true }
+                            MenuEntry("Study selected beam", { menuOpen = false }) { beamRequest = viewModel.prepareStudy() }
+                            MenuEntry("Beam schedule…", { menuOpen = false }) { dialog = Dialog.SCHEDULE }
                             MenuEntry("Export PDF…", { menuOpen = false }) { dialog = Dialog.EXPORT_PDF }
                             MenuEntry("Clear drawing", { menuOpen = false }) { dialog = Dialog.CONFIRM_CLEAR }
                         }
@@ -179,13 +186,18 @@ fun CadEditorScreen(viewModel: CadEditorViewModel = hiltViewModel()) {
                                 onTransform = viewModel::onTransform,
                                 onCursorDelta = viewModel::onCursorDelta,
                                 onTap = viewModel::onTap,
+                                onBox = viewModel::onSelectBox,
                                 modifier = Modifier.weight(1f).fillMaxHeight()
                             )
                         }
                     }
                 }
             }
-            EditorControls(state, viewModel)
+            EditorControls(
+                state, viewModel,
+                onStudy = { beamRequest = viewModel.prepareStudy() },
+                onProps = { dialog = Dialog.PROPERTIES }
+            )
         }
     }
 
@@ -251,6 +263,20 @@ fun CadEditorScreen(viewModel: CadEditorViewModel = hiltViewModel()) {
                 }
             }
         }
+        Dialog.PROPERTIES -> PropertiesDialog(
+            selected = state.selected,
+            onDismiss = { dialog = Dialog.NONE },
+            onRename = viewModel::renameSelected,
+            onAutoName = viewModel::autoNameSelected,
+            onLayer = viewModel::setLayerSelected,
+            onThickness = viewModel::setThicknessSelected
+        )
+        Dialog.SCHEDULE -> ScheduleDialog(
+            studies = state.studies,
+            onZoom = { id -> dialog = Dialog.NONE; viewModel.focusStudy(id) },
+            onOpen = { id -> dialog = Dialog.NONE; beamRequest = viewModel.studyRequestFor(id) },
+            onDismiss = { dialog = Dialog.NONE }
+        )
         Dialog.CONFIRM_CLEAR -> OptionDialog(
             title = "Clear drawing?",
             note = "Removes every object. You can undo this.",
@@ -273,7 +299,12 @@ private fun MenuEntry(label: String, closeMenu: () -> Unit, action: () -> Unit) 
 // ---- Bottom controls ----------------------------------------------------------------------------------
 
 @Composable
-private fun EditorControls(state: EditorUiState, vm: CadEditorViewModel) {
+private fun EditorControls(
+    state: EditorUiState,
+    vm: CadEditorViewModel,
+    onStudy: () -> Unit,
+    onProps: () -> Unit
+) {
     var tab by remember { mutableStateOf(PanelTab.DRAW) }
     var showNumeric by remember { mutableStateOf(false) }
 
@@ -311,11 +342,15 @@ private fun EditorControls(state: EditorUiState, vm: CadEditorViewModel) {
                         EditorTool.values().filter { it.category == ToolCategory.MODIFY }
                             .forEach { ToolChip(it, state, vm) }
                         TextButton(onClick = vm::selectAll) { Text("All") }
+                        TextButton(onClick = vm::selectConnected, enabled = state.selectedIds.isNotEmpty()) { Text("Chain") }
+                        TextButton(onClick = vm::selectSameKind, enabled = state.selectedIds.isNotEmpty()) { Text("Same") }
+                        TextButton(onClick = vm::invertSelection) { Text("Invert") }
                     }
                     PanelTab.SNAP -> {
                         FilterChip(state.snapSettings.gridEnabled, vm::toggleGridSnap, { Text("Grid") })
                         FilterChip(state.snapSettings.objectEnabled, vm::toggleObjectSnap, { Text("Object") })
                         FilterChip(state.orthoEnabled, vm::toggleOrtho, { Text("Ortho") })
+                        FilterChip(state.labelMode != LabelMode.OFF, vm::cycleLabelMode, { Text("Labels: ${state.labelMode.label}") })
                         Text("Wall", style = MaterialTheme.typography.labelMedium)
                         WallThickness.STANDARD_CM.forEach { cm ->
                             FilterChip(state.thicknessCm == cm, { vm.setThickness(cm) }, { Text("$cm cm") })
@@ -337,6 +372,8 @@ private fun EditorControls(state: EditorUiState, vm: CadEditorViewModel) {
                 ) { Text("Close") }
                 OutlinedButton(onClick = vm::cancel) { Text("Esc") }
                 OutlinedButton(onClick = vm::deleteSelected, enabled = state.selectedIds.isNotEmpty()) { Text("Delete") }
+                Button(onClick = onStudy, enabled = state.selectedIds.isNotEmpty()) { Text("Study") }
+                OutlinedButton(onClick = onProps, enabled = state.selectedIds.isNotEmpty()) { Text("Props") }
                 TextButton(onClick = { showNumeric = !showNumeric }) { Text(if (showNumeric) "123 ▾" else "123 ▸") }
             }
 
@@ -391,6 +428,12 @@ private fun angleLabel(tool: EditorTool): String = when (tool) {
 }
 
 private fun statusText(state: EditorUiState): String {
+    if (state.selectedIds.isNotEmpty() && state.tool == EditorTool.SELECT) {
+        val sel = state.selected
+        val names = sel.map { it.name }.filter { it.isNotBlank() }.take(4).joinToString(", ")
+        val total = sel.mapNotNull { it.lengthM() }.sum()
+        return "${sel.size} selected · total ${Units.formatLength(total)}" + if (names.isNotEmpty()) " · $names" else ""
+    }
     val cursor = state.cursor ?: return "Tap the canvas, then drag to fine-tune the crosshair"
     val pos = "X ${Units.formatCoord(cursor.point.x)}  Y ${Units.formatCoord(cursor.point.y)}  · ${snapLabel(cursor.type)}"
     val last = state.points.lastOrNull() ?: return pos
@@ -508,5 +551,115 @@ private fun TextDialog(onDismiss: () -> Unit, onConfirm: (String, Double) -> Uni
             ) { Text("Add") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+
+// ---- Properties & schedule dialogs --------------------------------------------------------------------------
+
+@Composable
+private fun PropertiesDialog(
+    selected: List<CadEntity>,
+    onDismiss: () -> Unit,
+    onRename: (String) -> Unit,
+    onAutoName: (String) -> Unit,
+    onLayer: (String) -> Unit,
+    onThickness: (Int) -> Unit
+) {
+    val single = selected.singleOrNull()
+    var name by remember(single?.id) { mutableStateOf(single?.name ?: "") }
+    var layer by remember(single?.id) { mutableStateOf(single?.layer ?: "") }
+    var prefix by remember { mutableStateOf("B") }
+    var thick by remember(single?.id) { mutableStateOf(((single as? Wall)?.thicknessM?.times(100.0))?.toInt()?.toString() ?: "") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (single != null) "${single.kindLabel()} properties" else "${selected.size} elements") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (single != null) {
+                    val len = single.lengthM()
+                    Text(
+                        (if (len != null) "Length ${Units.formatLength(len)}" else "") +
+                            (if (single is Wall) " · angle ${Units.formatAngle(single.angleDeg)}" else ""),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = name, onValueChange = { name = it }, singleLine = true,
+                        label = { Text("Name / mark (e.g. B1)") }
+                    )
+                    OutlinedTextField(value = layer, onValueChange = { layer = it }, singleLine = true, label = { Text("Layer") })
+                    if (single is Wall) {
+                        OutlinedTextField(
+                            value = thick, onValueChange = { thick = it.filter { c -> c.isDigit() } }, singleLine = true,
+                            label = { Text("Wall thickness (cm)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                    }
+                } else {
+                    val total = selected.mapNotNull { it.lengthM() }.sum()
+                    Text("Total length ${Units.formatLength(total)}", style = MaterialTheme.typography.bodySmall)
+                    Text("Number them in drawing order:", style = MaterialTheme.typography.labelMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = prefix, onValueChange = { prefix = it }, singleLine = true,
+                            label = { Text("Prefix") }, modifier = Modifier.weight(1f)
+                        )
+                        Button(onClick = { onAutoName(prefix) }, enabled = prefix.isNotBlank()) { Text("Auto-number") }
+                    }
+                    OutlinedTextField(value = layer, onValueChange = { layer = it }, singleLine = true, label = { Text("Layer for all") })
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (single != null) onRename(name)
+                if (layer.isNotBlank()) onLayer(layer)
+                thick.toIntOrNull()?.let { onThickness(it) }
+                onDismiss()
+            }) { Text("Apply") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+    )
+}
+
+@Composable
+private fun ScheduleDialog(
+    studies: List<StudyRecord>,
+    onZoom: (String) -> Unit,
+    onOpen: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Beam schedule (${studies.size})") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (studies.isEmpty()) Text("No studied beams yet. Select a line and press Study.")
+                studies.sortedBy { it.name }.forEach { st ->
+                    val sum = st.summary
+                    Column {
+                        Text(
+                            st.name + (if (sum != null) "  " + (if (sum.ok) "✓" else "✗") else ""),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        if (sum != null) {
+                            Text(
+                                "${sum.section} cm · bottom ${sum.bottom} · top ${sum.top} · stirrups ${sum.stirrups}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
+                                "Mu max ${"%.1f".format(Locale.US, sum.maxMomentKnM)} kN·m · Vu max ${"%.1f".format(Locale.US, sum.maxShearKn)} kN",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                        Row {
+                            TextButton(onClick = { onZoom(st.id) }) { Text("Show") }
+                            TextButton(onClick = { onOpen(st.id) }) { Text("Open study") }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
     )
 }

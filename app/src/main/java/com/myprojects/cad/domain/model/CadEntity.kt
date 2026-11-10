@@ -17,27 +17,33 @@ object Layers {
 sealed interface CadEntity {
     val id: String
     val layer: String
+
+    /** User-given mark such as "B1" or "W3". Empty when unnamed. */
+    val name: String
 }
 
 data class LineEntity(
     override val id: String = newId(),
     val start: Vec2,
     val end: Vec2,
-    override val layer: String = Layers.DEFAULT
+    override val layer: String = Layers.DEFAULT,
+    override val name: String = ""
 ) : CadEntity
 
 data class PolylineEntity(
     override val id: String = newId(),
     val points: List<Vec2>,
     val closed: Boolean = false,
-    override val layer: String = Layers.DEFAULT
+    override val layer: String = Layers.DEFAULT,
+    override val name: String = ""
 ) : CadEntity
 
 data class CircleEntity(
     override val id: String = newId(),
     val center: Vec2,
     val radius: Double,
-    override val layer: String = Layers.DEFAULT
+    override val layer: String = Layers.DEFAULT,
+    override val name: String = ""
 ) : CadEntity
 
 /** Arc from [startDeg] to [endDeg], counter-clockwise (same as DXF). */
@@ -47,7 +53,8 @@ data class ArcEntity(
     val radius: Double,
     val startDeg: Double,
     val endDeg: Double,
-    override val layer: String = Layers.DEFAULT
+    override val layer: String = Layers.DEFAULT,
+    override val name: String = ""
 ) : CadEntity {
     val sweepDeg: Double get() = Geo.sweepDeg(startDeg, endDeg)
     fun pointAt(deg: Double): Vec2 = center + Vec2.fromPolar(radius, Math.toRadians(deg))
@@ -62,7 +69,8 @@ data class TextEntity(
     val text: String,
     val heightM: Double = 0.25,
     val rotationDeg: Double = 0.0,
-    override val layer: String = Layers.TEXT
+    override val layer: String = Layers.TEXT,
+    override val name: String = ""
 ) : CadEntity
 
 /** Aligned dimension between [p1] and [p2]; [offset] is the signed distance of the dimension line to the left of p1->p2. */
@@ -71,5 +79,6 @@ data class DimensionEntity(
     val p1: Vec2,
     val p2: Vec2,
     val offset: Double,
-    override val layer: String = Layers.DIM
+    override val layer: String = Layers.DIM,
+    override val name: String = ""
 ) : CadEntity
