@@ -39,17 +39,21 @@ import com.myprojects.cad.core.geometry.Vec2
 import com.myprojects.cad.domain.model.ArcEntity
 import com.myprojects.cad.domain.model.CadEntity
 import com.myprojects.cad.domain.model.CircleEntity
+import com.myprojects.cad.domain.model.ColumnEntity
+import com.myprojects.cad.domain.model.ColumnShape
 import com.myprojects.cad.domain.model.DimensionEntity
 import com.myprojects.cad.domain.model.LineEntity
 import com.myprojects.cad.domain.model.PolylineEntity
 import com.myprojects.cad.domain.model.TextEntity
 import com.myprojects.cad.domain.model.Wall
 import com.myprojects.cad.domain.model.labelAnchor
+import com.myprojects.cad.domain.structural.ColumnStudyRecord
 import com.myprojects.cad.domain.structural.StudyRecord
 import com.myprojects.cad.domain.model.geometry
 import kotlin.math.atan2
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.roundToInt
 
 internal fun Vec2.toOffset() = Offset(x.toFloat(), y.toFloat())
 
@@ -315,6 +319,31 @@ private fun DrawScope.drawEntity(
             }
         }
         is DimensionEntity -> drawDimension(vp, e, color, width, dash, labelPaint)
+        is ColumnEntity -> {
+            val fill = when (mode) {
+                DrawMode.NORMAL -> pal.wallEdge.copy(alpha = 0.9f)
+                DrawMode.SELECTED -> pal.selected.copy(alpha = 0.75f)
+                DrawMode.PREVIEW -> pal.preview.copy(alpha = 0.35f)
+            }
+            val center = vp.worldToScreen(e.center).toOffset()
+            if (e.shape == ColumnShape.CIRCULAR) {
+                val r = (e.radiusM * vp.scale).toFloat()
+                drawCircle(fill, radius = r, center = center)
+                drawCircle(color, radius = r, center = center, style = stroke)
+                drawLine(color, Offset(center.x - r, center.y), Offset(center.x + r, center.y), width * 0.6f)
+                drawLine(color, Offset(center.x, center.y - r), Offset(center.x, center.y + r), width * 0.6f)
+            } else {
+                val c = e.corners().map { vp.worldToScreen(it).toOffset() }
+                val path = Path().apply {
+                    moveTo(c[0].x, c[0].y); lineTo(c[1].x, c[1].y); lineTo(c[2].x, c[2].y); lineTo(c[3].x, c[3].y); close()
+                }
+                drawPath(path, fill)
+                drawPath(path, color, style = stroke)
+                // the usual plan symbol: a cross between opposite corners
+                drawLine(color, c[0], c[2], width * 0.6f)
+                drawLine(color, c[1], c[3], width * 0.6f)
+            }
+        }
     }
 }
 
@@ -434,14 +463,19 @@ private fun DrawScope.drawLabels(
             if (e != null && e.name == st.name) skip.add(id)
         }
     }
+    val colByEntity = HashMap<String, ColumnStudyRecord>()
+    for (cs in state.columnStudies) colByEntity[cs.entityId] = cs
     paint.textAlign = android.graphics.Paint.Align.CENTER
     for (e in state.entities) {
         if (e.name.isBlank() || e is TextEntity || e.id in skip) continue
+        val colStudy = colByEntity[e.id]
         val pos = vp.worldToScreen(e.labelAnchor()).toOffset()
         if (pos.x < -120f || pos.y < -120f || pos.x > size.width + 120f || pos.y > size.height + 120f) continue
         val study = byFirst[e.id]
         val sum = study?.summary
+        val colSum = colStudy?.summary
         val color = when {
+            colSum != null -> if (colSum.ok) okColor else badColor
             sum == null -> nameColor
             sum.ok -> okColor
             else -> badColor
@@ -449,6 +483,12 @@ private fun DrawScope.drawLabels(
         paint.isFakeBoldText = true
         paint.textSize = 12.sp.toPx()
         drawHaloText(e.name, pos.x, pos.y + 20.dp.toPx(), paint, color, halo)
+        if (state.labelMode == LabelMode.FULL && colSum != null) {
+            paint.isFakeBoldText = false
+            paint.textSize = 10.sp.toPx()
+            drawHaloText("${colSum.section} cm", pos.x, pos.y + 33.dp.toPx(), paint, color, halo)
+            drawHaloText("${colSum.bars}  ·  ${(colSum.ratio * 100).roundToInt()}%", pos.x, pos.y + 45.dp.toPx(), paint, color, halo)
+        }
         if (state.labelMode == LabelMode.FULL && sum != null) {
             paint.isFakeBoldText = false
             paint.textSize = 10.sp.toPx()

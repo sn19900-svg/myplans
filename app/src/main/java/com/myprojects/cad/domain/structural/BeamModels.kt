@@ -1,5 +1,6 @@
 package com.myprojects.cad.domain.structural
 
+import com.myprojects.cad.core.geometry.Vec2
 import com.myprojects.cad.domain.model.newId
 
 /** Units everywhere in this package: m, mm, MPa, kN, kN·m. */
@@ -122,7 +123,9 @@ data class SupportReaction(
     val xM: Double,
     val deadKn: Double,
     val liveKn: Double,
-    val ultimateMaxKn: Double
+    val ultimateMaxKn: Double,
+    /** Largest live reaction over all load patterns (service). */
+    val liveMaxKn: Double = liveKn
 )
 
 data class FlexureDesign(
@@ -204,7 +207,9 @@ data class StudyRecord(
     val name: String,
     val input: BeamInput,
     val summary: StudySummary? = null,
-    val modifiedAt: Long = System.currentTimeMillis()
+    val modifiedAt: Long = System.currentTimeMillis(),
+    /** Loads this beam delivers to its supports, located in the drawing (for column design). */
+    val supports: List<SupportLoad> = emptyList()
 )
 
 /** What the drawing hands to the beam-study screen when the user presses Study. */
@@ -213,7 +218,9 @@ data class BeamStudyRequest(
     val name: String,
     val spansM: List<Double>,
     val note: String? = null,
-    val projectName: String = ""
+    val projectName: String = "",
+    /** Plan points at the span boundaries (n + 1 points), used to locate the supports. */
+    val boundaryPoints: List<Vec2> = emptyList()
 )
 
 fun BeamDesign.toSummary(input: BeamInput, maxMomentKnM: Double, maxShearKn: Double): StudySummary {

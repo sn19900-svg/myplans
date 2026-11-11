@@ -12,6 +12,9 @@ data class Chain(val segs: List<ChainSeg>) {
     val entityIds: List<String> get() = segs.map { it.entityId }.distinct()
     val spansM: List<Double> get() = segs.map { it.length }
 
+    /** Joint points: start of the first segment, then the end of every segment (n + 1 points). */
+    val points: List<Vec2> get() = if (segs.isEmpty()) emptyList() else listOf(segs.first().a) + segs.map { it.b }
+
     /** True when consecutive segments deviate by less than 2° (a physically straight beam). */
     val straight: Boolean
         get() {

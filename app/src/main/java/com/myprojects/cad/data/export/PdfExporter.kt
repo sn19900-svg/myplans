@@ -10,6 +10,8 @@ import com.myprojects.cad.core.geometry.Vec2
 import com.myprojects.cad.domain.model.ArcEntity
 import com.myprojects.cad.domain.model.CadEntity
 import com.myprojects.cad.domain.model.CircleEntity
+import com.myprojects.cad.domain.model.ColumnEntity
+import com.myprojects.cad.domain.model.ColumnShape
 import com.myprojects.cad.domain.model.DimensionEntity
 import com.myprojects.cad.domain.model.LineEntity
 import com.myprojects.cad.domain.model.PolylineEntity
@@ -120,6 +122,19 @@ class PdfExporter @Inject constructor() {
                         c.restore()
                     }
                     is DimensionEntity -> drawDimension(c, e, ::px, ::py, dimPaint, textPaint)
+                    is ColumnEntity -> {
+                        val colFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.rgb(40, 40, 40) }
+                        if (e.shape == ColumnShape.CIRCULAR) {
+                            c.drawCircle(px(e.center), py(e.center), (e.radiusM * k).toFloat(), colFill)
+                        } else {
+                            val path = android.graphics.Path()
+                            e.corners().forEachIndexed { i, p ->
+                                if (i == 0) path.moveTo(px(p), py(p)) else path.lineTo(px(p), py(p))
+                            }
+                            path.close()
+                            c.drawPath(path, colFill)
+                        }
+                    }
                 }
                 if (e.name.isNotBlank() && e !is TextEntity) {
                     // Element marks (B1, W3 …) printed under the element.

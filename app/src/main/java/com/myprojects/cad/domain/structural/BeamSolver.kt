@@ -292,7 +292,7 @@ object BeamSolver {
             }
             SupportReaction(
                 label = "${'A' + i}", xM = supportsX[i], deadKn = rd, liveKn = rlSum,
-                ultimateMaxKn = max(gD * rd + gL * rlPos, 1.4 * rd)
+                ultimateMaxKn = max(gD * rd + gL * rlPos, 1.4 * rd), liveMaxKn = rlPos
             )
         }
 

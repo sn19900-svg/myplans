@@ -5,6 +5,8 @@ import com.myprojects.cad.core.geometry.Vec2
 import com.myprojects.cad.domain.model.ArcEntity
 import com.myprojects.cad.domain.model.CadEntity
 import com.myprojects.cad.domain.model.CircleEntity
+import com.myprojects.cad.domain.model.ColumnEntity
+import com.myprojects.cad.domain.model.ColumnShape
 import com.myprojects.cad.domain.model.DimensionEntity
 import com.myprojects.cad.domain.model.LineEntity
 import com.myprojects.cad.domain.model.PolylineEntity
@@ -85,6 +87,12 @@ object DxfWriter {
                 o.n(50, Geo.normDeg(e.startDeg)); o.n(51, Geo.normDeg(e.endDeg))
             }
             is TextEntity -> o.text(layer, e.position, e.heightM, e.text, e.rotationDeg)
+            is ColumnEntity ->
+                if (e.shape == ColumnShape.CIRCULAR) {
+                    o.g(0, "CIRCLE"); o.g(8, layer); o.pt(10, e.center); o.n(40, e.radiusM * o.k)
+                } else {
+                    o.polyline(layer, e.corners(), true)
+                }
             is DimensionEntity -> {
                 val g = e.geometry()
                 val dir = (g.p2 - g.p1).normalized()
@@ -166,6 +174,7 @@ object DxfWriter {
         "WALLS" -> 5
         "DIM" -> 3
         "TEXT" -> 2
+        "COLUMNS" -> 4
         "LABELS" -> 6
         else -> 7
     }

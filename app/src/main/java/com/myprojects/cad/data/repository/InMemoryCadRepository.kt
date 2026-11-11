@@ -1,6 +1,7 @@
 package com.myprojects.cad.data.repository
 
 import com.myprojects.cad.domain.model.CadEntity
+import com.myprojects.cad.domain.structural.ColumnStudyRecord
 import com.myprojects.cad.domain.structural.StudyRecord
 import com.myprojects.cad.domain.repository.CadRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +24,20 @@ class InMemoryCadRepository @Inject constructor() : CadRepository {
     private val _studies = MutableStateFlow<List<StudyRecord>>(emptyList())
 
     override val studies: StateFlow<List<StudyRecord>> = _studies.asStateFlow()
+
+    private val _columnStudies = MutableStateFlow<List<ColumnStudyRecord>>(emptyList())
+
+    override val columnStudies: StateFlow<List<ColumnStudyRecord>> = _columnStudies.asStateFlow()
+
+    override fun upsertColumnStudy(record: ColumnStudyRecord) {
+        synchronized(lock) {
+            _columnStudies.value = _columnStudies.value.filterNot { it.id == record.id || it.entityId == record.entityId } + record
+        }
+    }
+
+    override fun setColumnStudies(list: List<ColumnStudyRecord>) {
+        synchronized(lock) { _columnStudies.value = list }
+    }
 
     override fun upsertStudy(record: StudyRecord) {
         synchronized(lock) {

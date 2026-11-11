@@ -17,6 +17,7 @@ import com.myprojects.cad.domain.structural.BeamStudyRequest
 import com.myprojects.cad.domain.structural.BeamType
 import com.myprojects.cad.domain.structural.EndCondition
 import com.myprojects.cad.domain.structural.StudyRecord
+import com.myprojects.cad.domain.structural.SupportLoad
 import com.myprojects.cad.domain.structural.toSummary
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -205,11 +206,31 @@ class BeamStudyViewModel @Inject constructor(
                 entityIds = req.entityIds,
                 name = name,
                 input = input,
-                summary = d.toSummary(input, mu, vu)
+                summary = d.toSummary(input, mu, vu),
+                supports = supportLoads(input, a, req, name)
             )
         )
         val ids = req.entityIds.toSet()
         repository.update { list -> list.map { if (it.id in ids && it.name != name) it.withName(name) else it } }
+    }
+
+    /** Reactions delivered to each support, placed at the support's position in the drawing (loads for the columns below). */
+    private fun supportLoads(input: BeamInput, a: BeamAnalysis, req: BeamStudyRequest, name: String): List<SupportLoad> {
+        val n = input.spansM.size
+        if (req.boundaryPoints.size != n + 1) return emptyList()
+        val boundaries = (0..n).filter {
+            !(it == 0 && input.leftCondition == EndCondition.FREE) && !(it == n && input.rightCondition == EndCondition.FREE)
+        }
+        if (boundaries.size != a.reactions.size) return emptyList()
+        return boundaries.mapIndexed { i, k ->
+            val rigid = (k == 0 && input.leftCondition == EndCondition.FIXED) ||
+                (k == n && input.rightCondition == EndCondition.FIXED)
+            SupportLoad(
+                point = req.boundaryPoints[k], beamName = name,
+                deadKn = max(0.0, a.reactions[i].deadKn), liveKn = max(0.0, a.reactions[i].liveMaxKn),
+                endMomentKnM = if (rigid) a.supportNegativeKnM[i] else 0.0
+            )
+        }
     }
 
     private fun buildInput(f: BeamForm): BeamInput? {

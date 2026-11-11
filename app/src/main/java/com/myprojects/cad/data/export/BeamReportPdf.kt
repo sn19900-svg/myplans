@@ -21,7 +21,7 @@ class BeamReportPdf @Inject constructor() {
     fun export(project: String, name: String, a: BeamAnalysis, d: BeamDesign, out: OutputStream) {
         val doc = PdfDocument()
         try {
-            val sheet = Sheet(doc, "$project  ·  $name")
+            val sheet = ReportSheet(doc, "$project  ·  $name")
             sheet.newPage()
             write(sheet, project, name, a, d)
             sheet.finish()
@@ -31,7 +31,7 @@ class BeamReportPdf @Inject constructor() {
         }
     }
 
-    private fun write(s: Sheet, project: String, name: String, a: BeamAnalysis, d: BeamDesign) {
+    private fun write(s: ReportSheet, project: String, name: String, a: BeamAnalysis, d: BeamDesign) {
         val i = a.input
         s.title("Beam calculation sheet — $name")
         s.line("Project: ${project.ifBlank { "—" }}     Date: ${SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())}")
@@ -118,137 +118,4 @@ class BeamReportPdf @Inject constructor() {
     private fun f0(v: Double) = String.format(Locale.US, "%.0f", v)
     private fun f1(v: Double) = String.format(Locale.US, "%.1f", v)
     private fun f2(v: Double) = String.format(Locale.US, "%.2f", v)
-
-    /** Minimal flowing A4 layout (points). */
-    private class Sheet(val doc: PdfDocument, val header: String) {
-        val w = 595
-        val h = 842
-        val m = 40f
-        var no = 0
-        lateinit var page: PdfDocument.Page
-        lateinit var c: Canvas
-        var y = 0f
-
-        val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 9f }
-        val bold = Paint(text).apply { isFakeBoldText = true }
-        private val thin = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.GRAY; strokeWidth = 0.6f; style = Paint.Style.STROKE }
-
-        fun newPage() {
-            if (no > 0) {
-                footer()
-                doc.finishPage(page)
-            }
-            no++
-            page = doc.startPage(PdfDocument.PageInfo.Builder(w, h, no).create())
-            c = page.canvas
-            c.drawColor(Color.WHITE)
-            y = m + 8f
-        }
-
-        private fun footer() {
-            val p = Paint(text).apply { textSize = 7.5f; color = Color.DKGRAY }
-            c.drawLine(m, h - m + 6f, w - m, h - m + 6f, thin)
-            c.drawText(header.take(70), m, h - m + 18f, p)
-            c.drawText("MyProjects · page $no", w - m - 80f, h - m + 18f, p)
-        }
-
-        fun ensure(space: Float) {
-            if (y + space > h - m - 4f) newPage()
-        }
-
-        fun finish() {
-            footer()
-            doc.finishPage(page)
-        }
-
-        fun title(t: String) {
-            val p = Paint(bold).apply { textSize = 15f }
-            c.drawText(t, m, y + 12f, p)
-            y += 26f
-        }
-
-        fun heading(t: String) {
-            ensure(40f)
-            y += 10f
-            val p = Paint(bold).apply { textSize = 11f }
-            c.drawText(t, m, y, p)
-            y += 4f
-            c.drawLine(m, y, w - m, y, thin)
-            y += 12f
-        }
-
-        fun line(t: String, p: Paint = text) {
-            ensure(14f)
-            c.drawText(t, m, y, p)
-            y += 13f
-        }
-
-        /** Wrapped paragraph. */
-        fun para(t: String) {
-            var rest = t
-            val maxW = w - 2 * m
-            while (rest.isNotEmpty()) {
-                val n = text.breakText(rest, true, maxW, null).coerceAtLeast(1)
-                var cut = n
-                if (n < rest.length) {
-                    val sp = rest.lastIndexOf(' ', n)
-                    if (sp > 0) cut = sp
-                }
-                line(rest.substring(0, cut).trimEnd())
-                rest = rest.substring(cut).trimStart()
-            }
-        }
-
-        fun table(headers: List<String>, rows: List<List<String>>, xs: List<Float>) {
-            ensure(14f * (rows.size + 2))
-            headers.forEachIndexed { k, hh -> c.drawText(hh, m + xs[k], y, bold) }
-            y += 4f
-            c.drawLine(m, y, w - m, y, thin)
-            y += 10f
-            for (r in rows) {
-                ensure(14f)
-                r.forEachIndexed { k, cell -> c.drawText(cell, m + xs[k], y, text) }
-                y += 12f
-            }
-            y += 4f
-        }
-
-        fun plot(title: String, xs: DoubleArray, series: List<DoubleArray>, supports: List<Double>, positiveDown: Boolean) {
-            val height = 110f
-            ensure(height + 30f)
-            c.drawText(title, m, y, bold)
-            y += 8f
-            val left = m + 4f
-            val width = w - 2 * m - 8f
-            val top = y + 14f
-            val h2 = height - 28f
-            var lo = 0.0
-            var hi = 0.0
-            var maxV = 0.0; var minV = 0.0
-            for (sr in series) for (v in sr) { lo = min(lo, v); hi = max(hi, v); maxV = max(maxV, v); minV = min(minV, v) }
-            if (hi - lo < 1e-9) hi = lo + 1.0
-            val x0 = xs.first()
-            val span = max(xs.last() - x0, 1e-9)
-            fun px(x: Double) = (left + (x - x0) / span * width).toFloat()
-            fun py(v: Double) = (if (positiveDown) top + (v - lo) / (hi - lo) * h2 else top + (hi - v) / (hi - lo) * h2).toFloat()
-            c.drawRect(left, top - 10f, left + width.toFloat(), top + h2.toFloat() + 10f, thin)
-            val zero = py(0.0)
-            c.drawLine(left, zero, left + width.toFloat(), zero, thin)
-            val colors = listOf(Color.rgb(20, 90, 180), Color.rgb(200, 90, 20))
-            series.forEachIndexed { si, sr ->
-                val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.2f; color = colors[si % 2] }
-                val path = android.graphics.Path()
-                for (k in xs.indices) if (k == 0) path.moveTo(px(xs[k]), py(sr[k])) else path.lineTo(px(xs[k]), py(sr[k]))
-                c.drawPath(path, p)
-            }
-            for (sx in supports) {
-                val t = android.graphics.Path()
-                t.moveTo(px(sx), zero); t.lineTo(px(sx) - 4f, zero + 8f); t.lineTo(px(sx) + 4f, zero + 8f); t.close()
-                c.drawPath(t, Paint(text).apply { style = Paint.Style.FILL })
-            }
-            val small = Paint(text).apply { textSize = 8f }
-            c.drawText("max %.1f   min %.1f".format(Locale.US, maxV, minV), left + 4f, top + h2.toFloat() + 8f, small)
-            y = top + h2.toFloat() + 22f
-        }
-    }
 }

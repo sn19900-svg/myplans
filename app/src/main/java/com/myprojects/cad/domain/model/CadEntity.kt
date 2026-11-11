@@ -11,6 +11,7 @@ object Layers {
     const val WALLS = "WALLS"
     const val DIM = "DIM"
     const val TEXT = "TEXT"
+    const val COLUMNS = "COLUMNS"
 }
 
 /** Every drawable object. All coordinates are meters (Double), Y up, angles in degrees CCW. */
@@ -82,3 +83,39 @@ data class DimensionEntity(
     override val layer: String = Layers.DIM,
     override val name: String = ""
 ) : CadEntity
+
+enum class ColumnShape(val label: String) {
+    RECTANGULAR("Rectangular / square"),
+    CIRCULAR("Circular")
+}
+
+/**
+ * A column in plan. [widthM] is the size along the column's local x axis, [depthM] along local y
+ * (for circular columns [widthM] is the diameter). [rotationDeg] turns the local axes CCW.
+ */
+data class ColumnEntity(
+    override val id: String = newId(),
+    val center: Vec2,
+    val widthM: Double,
+    val depthM: Double,
+    val shape: ColumnShape = ColumnShape.RECTANGULAR,
+    val rotationDeg: Double = 0.0,
+    override val layer: String = Layers.COLUMNS,
+    override val name: String = ""
+) : CadEntity {
+    val radiusM: Double get() = widthM / 2.0
+
+    /** Four plan corners (rectangular columns). */
+    fun corners(): List<Vec2> {
+        val hx = widthM / 2.0
+        val hy = depthM / 2.0
+        val rad = Math.toRadians(rotationDeg)
+        return listOf(Vec2(-hx, -hy), Vec2(hx, -hy), Vec2(hx, hy), Vec2(-hx, hy)).map { center + it.rotated(rad) }
+    }
+
+    fun contains(p: Vec2): Boolean {
+        if (shape == ColumnShape.CIRCULAR) return p.distanceTo(center) <= radiusM
+        val local = (p - center).rotated(-Math.toRadians(rotationDeg))
+        return kotlin.math.abs(local.x) <= widthM / 2.0 && kotlin.math.abs(local.y) <= depthM / 2.0
+    }
+}

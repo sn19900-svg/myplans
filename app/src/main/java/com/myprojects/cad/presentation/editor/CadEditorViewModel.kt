@@ -18,6 +18,7 @@ import com.myprojects.cad.data.export.PdfExporter
 import com.myprojects.cad.data.io.DocumentIO
 import com.myprojects.cad.domain.model.CadEntity
 import com.myprojects.cad.domain.model.ChainBuilder
+import com.myprojects.cad.domain.model.ColumnEntity
 import com.myprojects.cad.domain.model.CadProject
 import com.myprojects.cad.domain.model.CircleEntity
 import com.myprojects.cad.domain.model.DimensionEntity
@@ -34,6 +35,8 @@ import com.myprojects.cad.domain.model.touchesRect
 import com.myprojects.cad.domain.model.withLayer
 import com.myprojects.cad.domain.model.withName
 import com.myprojects.cad.domain.structural.BeamStudyRequest
+import com.myprojects.cad.domain.structural.ColumnStudyRecord
+import com.myprojects.cad.domain.structural.ColumnStudyRequest
 import com.myprojects.cad.domain.structural.StudyRecord
 import com.myprojects.cad.domain.model.dimensionOffset
 import com.myprojects.cad.domain.model.distanceTo
@@ -53,6 +56,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Locale
 import javax.inject.Inject
 import kotlin.math.abs
 import kotlin.math.max
@@ -76,32 +80,36 @@ class CadEditorViewModel @Inject constructor(
     private var snapTargets = SnapTargets()
     private var savedEntities: List<CadEntity> = emptyList()
     private var savedStudies: List<StudyRecord> = emptyList()
+    private var savedColumnStudies: List<ColumnStudyRecord> = emptyList()
     private var projectCreatedAt = System.currentTimeMillis()
 
     private data class Snapshot(
         val entities: List<CadEntity>,
         val undo: Boolean,
         val redo: Boolean,
-        val studies: List<StudyRecord>
+        val studies: List<StudyRecord>,
+        val columnStudies: List<ColumnStudyRecord>
     )
 
     init {
         viewModelScope.launch {
-            combine(repository.entities, repository.canUndo, repository.canRedo, repository.studies) { e, u, r, st ->
-                Snapshot(e, u, r, st)
-            }.collect { snap ->
+            combine(
+                repository.entities, repository.canUndo, repository.canRedo, repository.studies, repository.columnStudies
+            ) { e, u, r, st, cs -> Snapshot(e, u, r, st, cs) }.collect { snap ->
                 snapTargets = snap.entities.toSnapTargets()
                 val ids = snap.entities.map { it.id }.toSet()
                 // A study is only shown while every element it was made from still exists.
                 val active = snap.studies.filter { st -> st.entityIds.all { it in ids } }
+                val activeColumns = snap.columnStudies.filter { it.entityId in ids }
                 _state.update { s ->
                     s.copy(
                         entities = snap.entities,
                         canUndo = snap.undo,
                         canRedo = snap.redo,
                         studies = active,
+                        columnStudies = activeColumns,
                         selectedIds = s.selectedIds.intersect(ids),
-                        dirty = snap.entities != savedEntities || active != savedStudies
+                        dirty = snap.entities != savedEntities || active != savedStudies || activeColumns != savedColumnStudies
                     )
                 }
             }
@@ -262,6 +270,16 @@ class CadEditorViewModel @Inject constructor(
                 }
             }
             EditorTool.TEXT -> _state.update { it.copy(textRequestAt = p) }
+            EditorTool.COLUMN -> {
+                val pr = s.columnPreset
+                addEntities(
+                    listOf(
+                        ColumnEntity(
+                            center = p, widthM = pr.widthCm / 100.0, depthM = pr.depthCm / 100.0, shape = pr.shape
+                        )
+                    )
+                )
+            }
             EditorTool.DIMENSION -> when (pts.size) {
                 0 -> setPoints(listOf(p))
                 1 -> if (pts[0].distanceTo(p) > MIN_LEN) setPoints(pts + p)
@@ -524,7 +542,8 @@ class CadEditorViewModel @Inject constructor(
             name = name,
             spansM = chain.spansM.take(8).map { Math.round(it * 1000.0) / 1000.0 },
             note = notes.joinToString(" ").ifEmpty { null },
-            projectName = s.projectName
+            projectName = s.projectName,
+            boundaryPoints = chain.points.take(9)
         )
     }
 
@@ -540,6 +559,75 @@ class CadEditorViewModel @Inject constructor(
         val st = _state.value.studies.firstOrNull { it.id == studyId } ?: return null
         _state.update { it.copy(selectedIds = st.entityIds.toSet()) }
         return prepareStudy()
+    }
+
+    // ---- Columns --------------------------------------------------------------------------------------------
+
+    fun setColumnPreset(preset: ColumnPreset) = _state.update { it.copy(columnPreset = preset) }
+
+    /** Width / depth in cm and rotation for the selected columns (circular columns keep depth = width). */
+    fun setColumnSizeSelected(widthCm: Int, depthCm: Int, rotationDeg: Double) {
+        val ids = _state.value.selectedIds
+        if (ids.isEmpty() || widthCm !in 15..200 || depthCm !in 15..200) return
+        repository.update { list ->
+            list.map { e ->
+                if (e.id in ids && e is ColumnEntity) {
+                    val d = if (e.shape == com.myprojects.cad.domain.model.ColumnShape.CIRCULAR) widthCm else depthCm
+                    e.copy(widthM = widthCm / 100.0, depthM = d / 100.0, rotationDeg = rotationDeg)
+                } else e
+            }
+        }
+    }
+
+    /**
+     * Study request for the selected column. The axial load comes from the beams that rest on it: every saved
+     * beam study that has a support inside (or within 15 cm of) the column footprint contributes its reactions.
+     */
+    fun prepareColumnStudy(): ColumnStudyRequest? {
+        val s = _state.value
+        val col = s.selected.filterIsInstance<ColumnEntity>().firstOrNull()
+        if (col == null) {
+            post("Select a column first, then press Study")
+            return null
+        }
+        var pd = 0.0
+        var pl = 0.0
+        val sources = ArrayList<String>()
+        for (study in s.studies) {
+            for (sup in study.supports) {
+                if (col.contains(sup.point) || sup.point.distanceTo(col.center) <= 0.15) {
+                    pd += sup.deadKn
+                    pl += sup.liveKn
+                    sources.add("${study.name}: D ${"%.1f".format(Locale.US, sup.deadKn)} / L ${"%.1f".format(Locale.US, sup.liveKn)} kN")
+                }
+            }
+        }
+        val existing = s.columnStudies.firstOrNull { it.entityId == col.id }
+        val name = existing?.name ?: col.name.ifBlank {
+            nextName("C", s.entities.map { it.name } + s.columnStudies.map { it.name })
+        }
+        val notes = ArrayList<String>()
+        if (sources.isEmpty()) notes.add("No studied beam rests on this column — enter the loads by hand (or study the beams first).")
+        if (s.selected.count { it is ColumnEntity } > 1) notes.add("Several columns selected — studying the first.")
+        return ColumnStudyRequest(
+            entityId = col.id, name = name, shape = col.shape,
+            bMm = Math.round(col.widthM * 1000.0).toDouble(), hMm = Math.round(col.depthM * 1000.0).toDouble(),
+            pdKn = pd, plKn = pl, loadSources = sources,
+            note = notes.joinToString(" ").ifEmpty { null }, projectName = s.projectName
+        )
+    }
+
+    fun focusColumnStudy(studyId: String) {
+        val st = _state.value.columnStudies.firstOrNull { it.id == studyId } ?: return
+        val members = _state.value.entities.filter { it.id == st.entityId }
+        _state.update { it.copy(selectedIds = setOf(st.entityId), tool = EditorTool.SELECT, points = emptyList()) }
+        zoomToEntities(members)
+    }
+
+    fun columnRequestFor(studyId: String): ColumnStudyRequest? {
+        val st = _state.value.columnStudies.firstOrNull { it.id == studyId } ?: return null
+        _state.update { it.copy(selectedIds = setOf(st.entityId)) }
+        return prepareColumnStudy()
     }
 
     // ---- Text ---------------------------------------------------------------------------------------
@@ -600,9 +688,11 @@ class CadEditorViewModel @Inject constructor(
     private fun applyProject(p: CadProject) {
         savedEntities = p.entities
         savedStudies = p.studies
+        savedColumnStudies = p.columnStudies
         projectCreatedAt = p.createdAt
         repository.setAll(p.entities)
         repository.setStudies(p.studies)
+        repository.setColumnStudies(p.columnStudies)
         _state.update {
             it.copy(
                 projectId = p.id, projectName = p.name, selectedIds = emptySet(),
@@ -619,22 +709,26 @@ class CadEditorViewModel @Inject constructor(
         val snapshot = repository.entities.value
         val ids = snapshot.map { it.id }.toSet()
         val studies = repository.studies.value.filter { st -> st.entityIds.all { it in ids } }
+        val columnStudies = repository.columnStudies.value.filter { it.entityId in ids }
         val project = CadProject(
-            id = s.projectId, name = s.projectName, entities = snapshot, studies = studies,
+            id = s.projectId, name = s.projectName, entities = snapshot, studies = studies, columnStudies = columnStudies,
             createdAt = projectCreatedAt, modifiedAt = System.currentTimeMillis()
         )
         projects.save(project)
         projects.setLastOpened(project.id)
         savedEntities = snapshot
         savedStudies = studies
+        savedColumnStudies = columnStudies
         repository.setStudies(studies)
+        repository.setColumnStudies(columnStudies)
         _state.update { it.copy(dirty = repository.entities.value != savedEntities) }
     }
 
     private suspend fun persistIfDirty() {
         val ids = repository.entities.value.map { it.id }.toSet()
         val active = repository.studies.value.filter { st -> st.entityIds.all { it in ids } }
-        if (repository.entities.value != savedEntities || active != savedStudies) persist()
+        val activeColumns = repository.columnStudies.value.filter { it.entityId in ids }
+        if (repository.entities.value != savedEntities || active != savedStudies || activeColumns != savedColumnStudies) persist()
     }
 
     /** Called from Activity.onStop so work is never lost. */

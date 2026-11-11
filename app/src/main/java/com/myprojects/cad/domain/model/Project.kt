@@ -1,5 +1,6 @@
 package com.myprojects.cad.domain.model
 
+import com.myprojects.cad.domain.structural.ColumnStudyRecord
 import com.myprojects.cad.domain.structural.StudyRecord
 
 data class CadProject(
@@ -7,6 +8,7 @@ data class CadProject(
     val name: String,
     val entities: List<CadEntity> = emptyList(),
     val studies: List<StudyRecord> = emptyList(),
+    val columnStudies: List<ColumnStudyRecord> = emptyList(),
     val createdAt: Long = System.currentTimeMillis(),
     val modifiedAt: Long = System.currentTimeMillis()
 )

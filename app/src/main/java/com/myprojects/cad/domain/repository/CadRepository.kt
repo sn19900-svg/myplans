@@ -1,6 +1,7 @@
 package com.myprojects.cad.domain.repository
 
 import com.myprojects.cad.domain.model.CadEntity
+import com.myprojects.cad.domain.structural.ColumnStudyRecord
 import com.myprojects.cad.domain.structural.StudyRecord
 import kotlinx.coroutines.flow.StateFlow
 
@@ -14,6 +15,10 @@ interface CadRepository {
     val studies: StateFlow<List<StudyRecord>>
     fun upsertStudy(record: StudyRecord)
     fun setStudies(list: List<StudyRecord>)
+
+    val columnStudies: StateFlow<List<ColumnStudyRecord>>
+    fun upsertColumnStudy(record: ColumnStudyRecord)
+    fun setColumnStudies(list: List<ColumnStudyRecord>)
 
     fun update(transform: (List<CadEntity>) -> List<CadEntity>)
 

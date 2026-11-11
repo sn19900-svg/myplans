@@ -51,6 +51,7 @@ fun CadEntity.withId(newId: String): CadEntity = when (this) {
     is ArcEntity -> copy(id = newId)
     is TextEntity -> copy(id = newId)
     is DimensionEntity -> copy(id = newId)
+    is ColumnEntity -> copy(id = newId)
 }
 
 fun CadEntity.transformed(x: Xform, keepId: Boolean = true): CadEntity {
@@ -82,6 +83,7 @@ fun CadEntity.transformed(x: Xform, keepId: Boolean = true): CadEntity {
             p2 = x.point(p2),
             offset = if (x.mirrored) -offset else offset
         )
+        is ColumnEntity -> copy(center = x.point(center), rotationDeg = x.angle(rotationDeg))
     }
     return if (keepId) moved else moved.withId(newId()).withName("")
 }
@@ -169,6 +171,13 @@ fun CadEntity.distanceTo(p: Vec2): Double = when (this) {
             min(Geo.distPointSegment(p, g.p1, g.e1), Geo.distPointSegment(p, g.p2, g.e2))
         )
     }
+    is ColumnEntity -> when {
+        contains(p) -> 0.0
+        shape == ColumnShape.CIRCULAR -> p.distanceTo(center) - radiusM
+        else -> corners().let { c ->
+            (0 until 4).minOf { i -> Geo.distPointSegment(p, c[i], c[(i + 1) % 4]) }
+        }
+    }
 }
 
 fun CadEntity.extentPoints(): List<Vec2> = when (this) {
@@ -187,6 +196,10 @@ fun CadEntity.extentPoints(): List<Vec2> = when (this) {
         val g = geometry()
         listOf(g.p1, g.p2, g.e1, g.e2)
     }
+    is ColumnEntity ->
+        if (shape == ColumnShape.CIRCULAR) listOf(
+            Vec2(center.x - radiusM, center.y - radiusM), Vec2(center.x + radiusM, center.y + radiusM)
+        ) else corners()
 }
 
 fun List<CadEntity>.worldBounds(): WorldRect? {
@@ -244,6 +257,22 @@ fun List<CadEntity>.toSnapTargets(): SnapTargets {
             is DimensionEntity -> {
                 endpoints.add(e.p1); endpoints.add(e.p2)
             }
+            is ColumnEntity -> {
+                centers.add(e.center)
+                if (e.shape == ColumnShape.CIRCULAR) {
+                    endpoints.add(Vec2(e.center.x + e.radiusM, e.center.y))
+                    endpoints.add(Vec2(e.center.x - e.radiusM, e.center.y))
+                    endpoints.add(Vec2(e.center.x, e.center.y + e.radiusM))
+                    endpoints.add(Vec2(e.center.x, e.center.y - e.radiusM))
+                } else {
+                    val c = e.corners()
+                    endpoints.addAll(c)
+                    for (i in 0 until 4) {
+                        midpoints.add(c[i].midpoint(c[(i + 1) % 4]))
+                        segments.add(Segment(c[i], c[(i + 1) % 4]))
+                    }
+                }
+            }
         }
     }
     return SnapTargets(endpoints, midpoints, centers, segments)
@@ -279,7 +308,7 @@ fun CadEntity.offsetBy(distance: Double, side: Vec2): CadEntity? {
             if (r <= 1e-9) null else copy(id = newId(), radius = r, name = "")
         }
         is PolylineEntity -> offsetPolyline(this, distance, side)
-        is TextEntity, is DimensionEntity -> null
+        is TextEntity, is DimensionEntity, is ColumnEntity -> null
     }
 }
 
@@ -326,6 +355,7 @@ fun CadEntity.withName(newName: String): CadEntity = when (this) {
     is ArcEntity -> copy(name = newName)
     is TextEntity -> copy(name = newName)
     is DimensionEntity -> copy(name = newName)
+    is ColumnEntity -> copy(name = newName)
 }
 
 fun CadEntity.withLayer(newLayer: String): CadEntity = when (this) {
@@ -336,6 +366,7 @@ fun CadEntity.withLayer(newLayer: String): CadEntity = when (this) {
     is ArcEntity -> copy(layer = newLayer)
     is TextEntity -> copy(layer = newLayer)
     is DimensionEntity -> copy(layer = newLayer)
+    is ColumnEntity -> copy(layer = newLayer)
 }
 
 fun CadEntity.kindLabel(): String = when (this) {
@@ -346,6 +377,7 @@ fun CadEntity.kindLabel(): String = when (this) {
     is ArcEntity -> "Arc"
     is TextEntity -> "Text"
     is DimensionEntity -> "Dimension"
+    is ColumnEntity -> "Column"
 }
 
 /** Length (or perimeter / arc length) in meters, or null for text. */
@@ -357,6 +389,7 @@ fun CadEntity.lengthM(): Double? = when (this) {
     is ArcEntity -> radius * Math.toRadians(sweepDeg)
     is DimensionEntity -> p1.distanceTo(p2)
     is TextEntity -> null
+    is ColumnEntity -> null
 }
 
 /** Where the name label sits (middle of the element). */
@@ -372,6 +405,7 @@ fun CadEntity.labelAnchor(): Vec2 = when (this) {
     is ArcEntity -> midPoint
     is TextEntity -> position
     is DimensionEntity -> geometry().let { it.d1.midpoint(it.d2) }
+    is ColumnEntity -> center
 }
 
 /** Next free mark for a prefix: names B1, B3 exist -> "B4". */

@@ -57,14 +57,18 @@ import com.myprojects.cad.core.geometry.Units
 import com.myprojects.cad.data.dxf.DxfUnit
 import com.myprojects.cad.data.export.PaperSize
 import com.myprojects.cad.domain.model.CadEntity
+import com.myprojects.cad.domain.model.ColumnEntity
 import com.myprojects.cad.domain.model.ProjectInfo
 import com.myprojects.cad.domain.model.Wall
 import com.myprojects.cad.domain.model.kindLabel
 import com.myprojects.cad.domain.model.lengthM
 import com.myprojects.cad.domain.structural.BeamStudyRequest
+import com.myprojects.cad.domain.structural.ColumnStudyRecord
+import com.myprojects.cad.domain.structural.ColumnStudyRequest
 import com.myprojects.cad.domain.structural.StudyRecord
 import com.myprojects.cad.domain.model.WallThickness
 import com.myprojects.cad.presentation.beam.BeamStudyScreen
+import com.myprojects.cad.presentation.column.ColumnStudyScreen
 import com.myprojects.cad.core.engine.SnapType
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -87,6 +91,7 @@ fun CadEditorScreen(viewModel: CadEditorViewModel = hiltViewModel()) {
     var importUnit by remember { mutableStateOf<Double?>(null) }
     var paper by remember { mutableStateOf(PaperSize.A3) }
     var beamRequest by remember { mutableStateOf<BeamStudyRequest?>(null) }
+    var columnRequest by remember { mutableStateOf<ColumnStudyRequest?>(null) }
 
     val dxfExport = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream")
@@ -108,6 +113,11 @@ fun CadEditorScreen(viewModel: CadEditorViewModel = hiltViewModel()) {
     val activeRequest = beamRequest
     if (activeRequest != null) {
         BeamStudyScreen(request = activeRequest, onBack = { beamRequest = null })
+        return
+    }
+    val activeColumn = columnRequest
+    if (activeColumn != null) {
+        ColumnStudyScreen(request = activeColumn, onBack = { columnRequest = null })
         return
     }
 
@@ -137,8 +147,11 @@ fun CadEditorScreen(viewModel: CadEditorViewModel = hiltViewModel()) {
                             MenuEntry("Rename…", { menuOpen = false }) { dialog = Dialog.RENAME }
                             MenuEntry("Import DXF…", { menuOpen = false }) { dialog = Dialog.IMPORT_DXF }
                             MenuEntry("Export DXF…", { menuOpen = false }) { dialog = Dialog.EXPORT_DXF }
-                            MenuEntry("Study selected beam", { menuOpen = false }) { beamRequest = viewModel.prepareStudy() }
-                            MenuEntry("Beam schedule…", { menuOpen = false }) { dialog = Dialog.SCHEDULE }
+                            MenuEntry("Study selected element", { menuOpen = false }) {
+                                if (state.selected.any { it is ColumnEntity }) columnRequest = viewModel.prepareColumnStudy()
+                                else beamRequest = viewModel.prepareStudy()
+                            }
+                            MenuEntry("Study schedule…", { menuOpen = false }) { dialog = Dialog.SCHEDULE }
                             MenuEntry("Export PDF…", { menuOpen = false }) { dialog = Dialog.EXPORT_PDF }
                             MenuEntry("Clear drawing", { menuOpen = false }) { dialog = Dialog.CONFIRM_CLEAR }
                         }
@@ -195,7 +208,10 @@ fun CadEditorScreen(viewModel: CadEditorViewModel = hiltViewModel()) {
             }
             EditorControls(
                 state, viewModel,
-                onStudy = { beamRequest = viewModel.prepareStudy() },
+                onStudy = {
+                    if (state.selected.any { it is ColumnEntity }) columnRequest = viewModel.prepareColumnStudy()
+                    else beamRequest = viewModel.prepareStudy()
+                },
                 onProps = { dialog = Dialog.PROPERTIES }
             )
         }
@@ -269,12 +285,16 @@ fun CadEditorScreen(viewModel: CadEditorViewModel = hiltViewModel()) {
             onRename = viewModel::renameSelected,
             onAutoName = viewModel::autoNameSelected,
             onLayer = viewModel::setLayerSelected,
-            onThickness = viewModel::setThicknessSelected
+            onThickness = viewModel::setThicknessSelected,
+            onColumnSize = viewModel::setColumnSizeSelected
         )
         Dialog.SCHEDULE -> ScheduleDialog(
             studies = state.studies,
+            columns = state.columnStudies,
             onZoom = { id -> dialog = Dialog.NONE; viewModel.focusStudy(id) },
             onOpen = { id -> dialog = Dialog.NONE; beamRequest = viewModel.studyRequestFor(id) },
+            onZoomColumn = { id -> dialog = Dialog.NONE; viewModel.focusColumnStudy(id) },
+            onOpenColumn = { id -> dialog = Dialog.NONE; columnRequest = viewModel.columnRequestFor(id) },
             onDismiss = { dialog = Dialog.NONE }
         )
         Dialog.CONFIRM_CLEAR -> OptionDialog(
@@ -336,8 +356,19 @@ private fun EditorControls(
                 }
                 ToolChip(EditorTool.PAN, state, vm)
                 when (tab) {
-                    PanelTab.DRAW -> EditorTool.values().filter { it.category == ToolCategory.DRAW }
-                        .forEach { ToolChip(it, state, vm) }
+                    PanelTab.DRAW -> {
+                        EditorTool.values().filter { it.category == ToolCategory.DRAW }
+                            .forEach { ToolChip(it, state, vm) }
+                        if (state.tool == EditorTool.COLUMN) {
+                            ColumnPreset.ALL.forEach { pr ->
+                                FilterChip(
+                                    selected = state.columnPreset == pr,
+                                    onClick = { vm.setColumnPreset(pr) },
+                                    label = { Text(pr.label) }
+                                )
+                            }
+                        }
+                    }
                     PanelTab.MODIFY -> {
                         EditorTool.values().filter { it.category == ToolCategory.MODIFY }
                             .forEach { ToolChip(it, state, vm) }
@@ -564,9 +595,14 @@ private fun PropertiesDialog(
     onRename: (String) -> Unit,
     onAutoName: (String) -> Unit,
     onLayer: (String) -> Unit,
-    onThickness: (Int) -> Unit
+    onThickness: (Int) -> Unit,
+    onColumnSize: (Int, Int, Double) -> Unit
 ) {
     val single = selected.singleOrNull()
+    val col = single as? ColumnEntity
+    var colW by remember(single?.id) { mutableStateOf(col?.let { Math.round(it.widthM * 100).toString() } ?: "") }
+    var colD by remember(single?.id) { mutableStateOf(col?.let { Math.round(it.depthM * 100).toString() } ?: "") }
+    var colRot by remember(single?.id) { mutableStateOf(col?.rotationDeg?.let { Math.round(it).toString() } ?: "0") }
     var name by remember(single?.id) { mutableStateOf(single?.name ?: "") }
     var layer by remember(single?.id) { mutableStateOf(single?.layer ?: "") }
     var prefix by remember { mutableStateOf("B") }
@@ -588,6 +624,26 @@ private fun PropertiesDialog(
                         label = { Text("Name / mark (e.g. B1)") }
                     )
                     OutlinedTextField(value = layer, onValueChange = { layer = it }, singleLine = true, label = { Text("Layer") })
+                    if (col != null) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OutlinedTextField(
+                                value = colW, onValueChange = { colW = it.filter { c -> c.isDigit() } }, singleLine = true,
+                                label = { Text(if (col.shape == com.myprojects.cad.domain.model.ColumnShape.CIRCULAR) "Ø (cm)" else "Width (cm)") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f)
+                            )
+                            if (col.shape != com.myprojects.cad.domain.model.ColumnShape.CIRCULAR) {
+                                OutlinedTextField(
+                                    value = colD, onValueChange = { colD = it.filter { c -> c.isDigit() } }, singleLine = true,
+                                    label = { Text("Depth (cm)") },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f)
+                                )
+                            }
+                            OutlinedTextField(
+                                value = colRot, onValueChange = { colRot = it.filter { c -> c.isDigit() || c == '-' } }, singleLine = true,
+                                label = { Text("Rotation °") }, modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
                     if (single is Wall) {
                         OutlinedTextField(
                             value = thick, onValueChange = { thick = it.filter { c -> c.isDigit() } }, singleLine = true,
@@ -615,6 +671,11 @@ private fun PropertiesDialog(
                 if (single != null) onRename(name)
                 if (layer.isNotBlank()) onLayer(layer)
                 thick.toIntOrNull()?.let { onThickness(it) }
+                if (col != null) {
+                    val w = colW.toIntOrNull()
+                    val depthCm = colD.toIntOrNull() ?: w
+                    if (w != null && depthCm != null) onColumnSize(w, depthCm, colRot.toDoubleOrNull() ?: 0.0)
+                }
                 onDismiss()
             }) { Text("Apply") }
         },
@@ -625,16 +686,38 @@ private fun PropertiesDialog(
 @Composable
 private fun ScheduleDialog(
     studies: List<StudyRecord>,
+    columns: List<ColumnStudyRecord>,
     onZoom: (String) -> Unit,
     onOpen: (String) -> Unit,
+    onZoomColumn: (String) -> Unit,
+    onOpenColumn: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Beam schedule (${studies.size})") },
+        title = { Text("Study schedule — ${studies.size} beams, ${columns.size} columns") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (studies.isEmpty()) Text("No studied beams yet. Select a line and press Study.")
+                if (studies.isEmpty() && columns.isEmpty()) Text("Nothing studied yet. Select a line or a column and press Study.")
+                if (columns.isNotEmpty()) Text("Columns", style = MaterialTheme.typography.titleMedium)
+                columns.sortedBy { it.name }.forEach { cs ->
+                    val sum = cs.summary
+                    Column {
+                        Text(cs.name + (if (sum != null) "  " + (if (sum.ok) "✓" else "✗") else ""), style = MaterialTheme.typography.titleSmall)
+                        if (sum != null) {
+                            Text("${sum.section} cm · ${sum.bars} · ${sum.ties}", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "Pu ${"%.0f".format(Locale.US, sum.puKn)} kN · ratio ${"%.2f".format(Locale.US, sum.ratio)}",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                        Row {
+                            TextButton(onClick = { onZoomColumn(cs.id) }) { Text("Show") }
+                            TextButton(onClick = { onOpenColumn(cs.id) }) { Text("Open study") }
+                        }
+                    }
+                }
+                if (studies.isNotEmpty()) Text("Beams", style = MaterialTheme.typography.titleMedium)
                 studies.sortedBy { it.name }.forEach { st ->
                     val sum = st.summary
                     Column {
