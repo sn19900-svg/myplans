@@ -4,6 +4,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
+import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 
